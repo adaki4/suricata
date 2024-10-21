@@ -88,6 +88,9 @@ TmEcode NoDPDKSupportExit(ThreadVars *tv, const void *initdata, void **data)
 #include "util-affinity.h"
 #include "util-dpdk.h"
 #include "util-dpdk-i40e.h"
+#include "util-dpdk-ice.h"
+#include "util-dpdk-ixgbe.h"
+#include "util-dpdk-mlx5.h"
 #include "util-dpdk-bonding.h"
 #include <numa.h>
 
@@ -198,6 +201,12 @@ static void DevicePostStartPMDSpecificActions(DPDKThreadVars *ptv, const char *d
     // and only after the start of the port
     if (strcmp(driver_name, "net_i40e") == 0)
         i40eDeviceSetRSS(ptv->port_id, ptv->threads);
+    // if (strcmp(driver_name, "net_ice") == 0)
+    //     iceDeviceSetRSS(ptv->port_id, ptv->threads);
+    // if (strcmp(driver_name, "net_ixgbe") == 0)
+    //     ixgbeDeviceSetRSS(ptv->port_id, ptv->threads);
+    if (strcmp(driver_name, "mlx5_pci") == 0)
+        mlx5DeviceSetRSS(ptv->port_id, ptv->threads);
 }
 
 static void DevicePreClosePMDSpecificActions(DPDKThreadVars *ptv, const char *driver_name)

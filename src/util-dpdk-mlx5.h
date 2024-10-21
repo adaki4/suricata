@@ -18,19 +18,19 @@
 /**
  * \file
  *
- * \author Lukas Sismis <lukas.sismis@gmail.com>
+ * \author Adam Kiripolsky <adamkiripolsky.official@gmail.com>
  */
 
-#ifndef UTIL_DPDK_IXGBE_H
-#define UTIL_DPDK_IXGBE_H
+#ifndef UTIL_DPDK_MLX5_H
+#define UTIL_DPDK_MLX5_H
 
 #include "suricata-common.h"
 
 #ifdef HAVE_DPDK
 
-int ixgbeDeviceSetRSS(int port_id, int nb_rx_queues);
-void ixgbeDeviceSetRSSHashFunction(uint64_t *rss_conf);
+int mlx5DeviceSetRSS(int port_id, int nb_rx_queues);
+void mlx5DeviceSetRSSHashFunction(uint64_t *rss_conf);
 
 #endif /* HAVE_DPDK */
 
-#endif /* UTIL_DPDK_IXGBE_H */
+#endif /* UTIL_DPDK_MLX5_H */

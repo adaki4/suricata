@@ -869,10 +869,10 @@ static void DeviceSetPMDSpecificRSS(struct rte_eth_rss_conf *rss_conf, const cha
     // RSS is configured in a specific way for a driver i40e and DPDK version <= 19.xx
     if (strcmp(driver_name, "net_i40e") == 0)
         i40eDeviceSetRSSConf(rss_conf);
-    if (strcmp(driver_name, "net_ice") == 0)
-        iceDeviceSetRSSConf(rss_conf);
-    if (strcmp(driver_name, "net_ixgbe") == 0)
-        ixgbeDeviceSetRSSHashFunction(&rss_conf->rss_hf);
+    // if (strcmp(driver_name, "net_ice") == 0)
+    //     iceDeviceSetRSSConf(rss_conf);
+    // if (strcmp(driver_name, "net_ixgbe") == 0)
+        // ixgbeDeviceSetRSSHashFunction(&rss_conf->rss_hf);
     if (strcmp(driver_name, "net_e1000_igb") == 0)
         rss_conf->rss_hf = (RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_IPV6 | RTE_ETH_RSS_IPV6_EX);
 }

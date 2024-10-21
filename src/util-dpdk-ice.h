@@ -30,6 +30,7 @@
 
 #include "util-dpdk.h"
 
+int iceDeviceSetRSS(int port_id, int nb_rx_queues);
 void iceDeviceSetRSSConf(struct rte_eth_rss_conf *rss_conf);
 
 #endif /* HAVE_DPDK */
