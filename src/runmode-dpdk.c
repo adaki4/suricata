@@ -46,6 +46,7 @@
 #include "util-dpdk-ice.h"
 #include "util-dpdk-ixgbe.h"
 #include "util-dpdk-rss.h"
+#include "util-dpdk-rte-flow.h"
 #include "util-time.h"
 #include "util-conf.h"
 #include "suricata.h"
@@ -120,6 +121,7 @@ static void DPDKDerefConfig(void *conf);
 #define DPDK_CONFIG_DEFAULT_VLAN_STRIP                  0
 #define DPDK_CONFIG_DEFAULT_COPY_MODE                   "none"
 #define DPDK_CONFIG_DEFAULT_COPY_INTERFACE              "none"
+#define DPDK_CONFIG_DEFAULT_DROP_FILTER                 "none"
 
 DPDKIfaceConfigAttributes dpdk_yaml = {
     .threads = "threads",
@@ -137,6 +139,7 @@ DPDKIfaceConfigAttributes dpdk_yaml = {
     .tx_descriptors = "tx-descriptors",
     .copy_mode = "copy-mode",
     .copy_iface = "copy-iface",
+    .drop_filter = "drop-filter",
 };
 
 static int GreatestDivisorUpTo(uint32_t num, uint32_t max_num)
@@ -306,6 +309,8 @@ static void DPDKDerefConfig(void *conf)
     SCEnter();
     DPDKIfaceConfig *iconf = (DPDKIfaceConfig *)conf;
 
+    iconf->RTERulesFree(&iconf->drop_filter);
+
     if (SC_ATOMIC_SUB(iconf->ref, 1) == 1) {
         if (iconf->pkt_mempool != NULL) {
             rte_mempool_free(iconf->pkt_mempool);
@@ -329,6 +334,7 @@ static void ConfigInit(DPDKIfaceConfig **iconf)
     SC_ATOMIC_INIT(ptr->ref);
     (void)SC_ATOMIC_ADD(ptr->ref, 1);
     ptr->DerefFunc = DPDKDerefConfig;
+    ptr->RTERulesFree = RuleStorageFree;
     ptr->flags = 0;
 
     *iconf = ptr;
@@ -830,6 +836,11 @@ static int ConfigLoad(DPDKIfaceConfig *iconf, const char *iface)
         SCReturnInt(retval);
 
     retval = ConfigSetCopyIfaceSettings(iconf, copy_iface_str, copy_mode_str);
+    if (retval < 0)
+        SCReturnInt(retval);
+
+    retval =
+            ConfigLoadRTEFlowRules(if_root, if_default, dpdk_yaml.drop_filter, &iconf->drop_filter);
     if (retval < 0)
         SCReturnInt(retval);
 

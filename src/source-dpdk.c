@@ -41,6 +41,7 @@
 #include "tm-threads.h"
 #include "tmqh-packetpool.h"
 #include "util-privs.h"
+#include "util-dpdk-rte-flow.h"
 #include "action-globals.h"
 
 #ifndef HAVE_DPDK
@@ -642,6 +643,13 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
             goto fail;
         }
 
+        retval = CreateRules(dpdk_config->iface, dpdk_config->port_id, &dpdk_config->drop_filter,
+                dev_info.driver_name);
+        if (retval != 0) {
+            SCLogError("%s: error when creating rte_flow rules", dpdk_config->iface);
+            goto fail;
+        }
+
         // some PMDs requires additional actions only after the device has started
         DevicePostStartPMDSpecificActions(ptv, dev_info.driver_name);
 
@@ -659,8 +667,17 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
         }
     }
 
+    // Save rte_flow rules from being destroyed
+    char **tmp = dpdk_config->drop_filter.rules;
+    dpdk_config->drop_filter.rules = NULL;
+
     *data = (void *)ptv;
     dpdk_config->DerefFunc(dpdk_config);
+
+    // Restore rte_flow rules
+    dpdk_config->drop_filter.rules = tmp;
+    tmp = NULL;
+
     SCReturnInt(TM_ECODE_OK);
 
 fail:
