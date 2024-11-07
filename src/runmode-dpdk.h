@@ -39,6 +39,8 @@ typedef struct DPDKIfaceConfigAttributes_ {
     const char *tx_descriptors;
     const char *copy_mode;
     const char *copy_iface;
+    const char *allow_filter; // array of strings, vector, dynamic array
+    const char *drop_filter;
 } DPDKIfaceConfigAttributes;
 
 int RunModeIdsDpdkWorkers(void);

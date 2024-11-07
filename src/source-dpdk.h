@@ -49,6 +49,12 @@ typedef struct DPDKWorkerSync_ {
     SC_ATOMIC_DECLARE(uint16_t, worker_checked_in);
 } DPDKWorkerSync;
 
+typedef struct RuleStorage_ {
+    uint16_t max_rule_count;
+    char **rules;
+    uint16_t curr_rule_count;
+} RuleStorage;
+
 typedef struct DPDKIfaceConfig_ {
 #ifdef HAVE_DPDK
     char iface[RTE_ETH_NAME_MAX_LEN];
@@ -73,6 +79,8 @@ typedef struct DPDKIfaceConfig_ {
     uint16_t nb_tx_desc;
     uint32_t mempool_size;
     uint32_t mempool_cache_size;
+    RuleStorage allow_filter;
+    RuleStorage drop_filter;
     struct rte_mempool *pkt_mempool;
     SC_ATOMIC_DECLARE(unsigned int, ref);
     /* threads bind queue id one by one */
