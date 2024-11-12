@@ -883,7 +883,6 @@ static DPDKIfaceConfig *ConfigParse(const char *iface)
 
 static void DeviceSetPMDSpecificRSS(struct rte_eth_rss_conf *rss_conf, const char *driver_name)
 {
-    // RSS is configured in a specific way for a driver i40e and DPDK version <= 19.xx
     if (strcmp(driver_name, "net_i40e") == 0)
         i40eDeviceSetRSSConf(rss_conf);
     if (strcmp(driver_name, "net_ice") == 0)
