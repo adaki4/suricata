@@ -24,7 +24,7 @@
 /**
  * \file
  *
- * \author Adam Kiripolsky <adamkiripolsky.official@gmail.com>
+ * \author Adam Kiripolsky <adam.kiripolsky@cesnet.cz>
  *
  * DPDK rte_flow rules util functions
  *
@@ -33,11 +33,35 @@
 #include "util-debug.h"
 #include "util-dpdk.h"
 #include "util-dpdk-rte-flow.h"
+#include "util-dpdk-rte-flow-pattern.h"
 #include "runmode-dpdk.h"
 
 #ifdef HAVE_DPDK
+// static void* TokenizeRules(RuleStorage *rule_storage);
 
-int RuleStorageAddRule(RuleStorage *rule_storage, const char *rule) {
+static void RuleStorageFree(RuleStorage *rule_storage) {
+    for (int i = 0; i < rule_storage->curr_rule_count; ++i) {
+        free(rule_storage->rules[i]);
+    }
+    free(rule_storage->rules);
+}
+
+static int RuleStorageExtendCapacity(RuleStorage *rule_storage) {
+    SCEnter();
+    RuleStorage *tmp_storage;
+
+    rule_storage->max_rule_count = 2 * rule_storage->max_rule_count;
+
+    tmp_storage = SCRealloc(rule_storage->rules, rule_storage->max_rule_count);
+    if (tmp_storage == NULL) {
+        RuleStorageFree(rule_storage);
+        SCReturnInt(-1);        
+    }
+    rule_storage = tmp_storage; 
+    SCReturnInt(0);
+}
+
+static int RuleStorageAddRule(RuleStorage *rule_storage, const char *rule) {
     SCEnter();
     int retval;
 
@@ -57,32 +81,11 @@ int RuleStorageAddRule(RuleStorage *rule_storage, const char *rule) {
     SCReturnInt(0);
 }
 
-void RuleStorageFree(RuleStorage *rule_storage) {
-    for (int i = 0; i < rule_storage->curr_rule_count; ++i) {
-        free(rule_storage->rules[i]);
-    }
-    free(rule_storage->rules);
-}
-
-int RuleStorageExtendCapacity(RuleStorage *rule_storage) {
-    SCEnter();
-    RuleStorage *tmp_storage;
-
-    rule_storage->max_rule_count = 2 * rule_storage->max_rule_count;
-
-    tmp_storage = SCRealloc(rule_storage->rules, rule_storage->max_rule_count);
-    if (tmp_storage == NULL) {
-        RuleStorageFree(rule_storage);
-        SCReturnInt(-1);        
-    }
-    rule_storage = tmp_storage; 
-    SCReturnInt(0);
-}
-
-int RuleStorageSetup(RuleStorage *rule_storage) {
+static int RuleStorageSetup(RuleStorage *rule_storage) {
     SCEnter();
     rule_storage->curr_rule_count = 0;
     rule_storage->max_rule_count = 5;
+    SCLogInfo("rule counts assigned");
     rule_storage->rules = SCMalloc(rule_storage->max_rule_count * sizeof(char *));
 
     if (rule_storage == NULL) {
@@ -94,13 +97,8 @@ int RuleStorageSetup(RuleStorage *rule_storage) {
 int ConfigLoadRTEFlowRules(ConfNode *if_root, ConfNode *if_default, const char *filter_type, DPDKIfaceConfig *iconf) {
     SCEnter();
     ConfNode *node;
-    RuleStorage *rule_storage;
+    RuleStorage rule_storage = {0};
 
-    if (strcmp(filter_type, "drop_filter") == 0) {
-        rule_storage = &iconf->drop_filter;
-    } else if (strcmp(filter_type, "allow_filter") == 0) {
-        rule_storage = &iconf->allow_filter;
-    }
     node = ConfNodeLookupChild(if_root, filter_type);
     if (node == NULL) {
         SCLogInfo("unable to find %s", filter_type);
@@ -108,8 +106,8 @@ int ConfigLoadRTEFlowRules(ConfNode *if_root, ConfNode *if_default, const char *
         ConfNode *rule_node;
         const char *rule;
         int retval;
-        
-        retval = RuleStorageSetup(rule_storage);
+        SCLogInfo("Trying to load rules");
+        retval = RuleStorageSetup(&rule_storage);
         if (retval != 0) {
             SCReturn(retval);
         }
@@ -119,58 +117,93 @@ int ConfigLoadRTEFlowRules(ConfNode *if_root, ConfNode *if_default, const char *
 
                 ConfGetChildValueWithDefault(rule_node, if_default, "rule", &rule);
                 SCLogInfo("found %s rule %s", filter_type, rule);
-                RuleStorageAddRule(rule_storage, rule);
+                RuleStorageAddRule(&rule_storage, rule);
             }
         }
+
     }
-    TokenizeRules(rule_storage);
+    
+    if (strcmp(filter_type, "drop-filter") == 0) {
+        iconf->drop_filter.rules = rule_storage.rules;
+        iconf->drop_filter.curr_rule_count = rule_storage.curr_rule_count;
+        iconf->drop_filter.max_rule_count = rule_storage.max_rule_count;
+        SCLogInfo("number or rules %i", rule_storage.curr_rule_count);
+    } else if (strcmp(filter_type, "allow-filter") == 0) {
+        iconf->allow_filter.rules = rule_storage.rules;
+    }
     SCReturnInt(0);
 }
 
-static int CountCharOccurence(const char* string, char pattern) {
-    int pattern_count;
-    char curr_ch;
-    while (curr_ch != '\0') {
-        if (curr_ch == pattern) {
-            pattern_count++;
-        }
-    }
-    return pattern_count;
-}
 
-static char* ClearRule(char **tokens, int tokens_count) {
-    int white_space_count;
-    for (int i = 0; i < tokens_count; ++i) {
-        white_space_count = CountCharOccurence(tokens[i], ' ');
-        if (white_space_count > 2) {
-            ParseItemWithSpec(tokens[i]);
+int CreateRules(int port_id, RuleStorage *rule_storage) {
+    SCLogInfo("Entering CreateRules");
+    //SCLogInfo("number or rules %i", rule_storage->curr_rule_count);
+    for (int i = 0; i < rule_storage->curr_rule_count; i++) {
+        struct rte_flow_item *items;
+        struct rte_flow_attr attr = { 0 };
+        struct rte_flow_action action[] = { { 0 }, { 0 } };
+        struct rte_flow *flow;
+        struct rte_flow_error flow_error = { 0 };
+    
+        attr.ingress = 1;
+        action->type = RTE_FLOW_ACTION_TYPE_DROP;
+        SCLogInfo("Entering ParsePattern");
+        ParsePattern(rule_storage->rules[i], &items);
+
+
+        flow = rte_flow_create(port_id, &attr, items, action, &flow_error);
+
+        if (flow == NULL) {
+            SCLogError("Error when creating rte_flow rule on: %s", flow_error.message);
+            int ret = rte_flow_validate(port_id, &attr, items, action, &flow_error);
+            SCLogError("Error on rte_flow validation for port: %s errmsg: %s",
+                    rte_strerror(-ret), flow_error.message);
+            return ret;
         } else {
-            ParseItemSimple(tokens[i]);
+            SCLogInfo("RTE_FLOW flow rule created for port ");
         }
-        // check dpdk-testpmd source code for parsing patterns
     }
+    RuleStorageFree(rule_storage);
+
+    return 0;
 }
+// static int CountCharOccurence(const char* string, char pattern) {
+//     int pattern_count;
+//     char curr_ch;
+//     while (curr_ch != '\0') {
+//         if (curr_ch == pattern) {
+//             pattern_count++;
+//         }
+//     }
+//     return pattern_count;
+// }
 
-static void* TokenizeRules(RuleStorage *rule_storage) {
-    char *rule;
-    int max_tokens;
+// static char* ClearRule(char **tokens, int tokens_count) {
+//     int white_space_count;
+//     for (int i = 0; i < tokens_count; ++i) {
+//         white_space_count = CountCharOccurence(tokens[i], ' ');
+//         if (white_space_count > 2) {
+//             ParseItemWithSpec(tokens[i]);
+//         } else {
+//             ParseItemSimple(tokens[i]);
+//         }
+//         // check dpdk-testpmd source code for parsing patterns
+//     }
+// }
 
-    for (int i = 0; i < rule_storage->curr_rule_count; ++i) {
-        rule = rule_storage->rules[i];
-        max_tokens = CountCharOccurence(rule, '/') + 1;
-        char *tokens[max_tokens];
-        rte_strsplit(rule, strlen(rule), tokens, max_tokens, '/');
+// static void* TokenizeRules(RuleStorage *rule_storage) {
+//     char *rule;
+//     int max_tokens;
+
+//     for (int i = 0; i < rule_storage->curr_rule_count; ++i) {
+//         rule = rule_storage->rules[i];
+//         max_tokens = CountCharOccurence(rule, '/') + 1;
+//         char *tokens[max_tokens];
+//         rte_strsplit(rule, strlen(rule), tokens, max_tokens, '/');
         
-    }
+//     }
 
-}
-
-static void PortSetL3AdressFilter() {
-}
-
-static void PortSetL4PortFilter() {
-
-}
+// }
 
 #endif /* HAVE_DPDK */
 /**

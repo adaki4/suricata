@@ -29,15 +29,15 @@
  * DPDK rte_flow rules util functions
  *
  */
-#include "conf.h"
-#include "decode.h"
-#include "source-dpdk.h"
 
+#include "rte_flow.h"
 
-#ifndef SURICATA_RTE_FLOW_RULES_H
-#define SURICATA_RTE_FLOW_RULES_H
+#ifndef SURICATA_RTE_FLOW_RULES_PATTERN_H
+#define SURICATA_RTE_FLOW_RULES_PATTERN_H
 
-int ConfigLoadRTEFlowRules(ConfNode *if_root, ConfNode *if_default, const char *filter_type, DPDKIfaceConfig *iconf);
-int CreateRules(int port_id, RuleStorage *rule_storage);
+int ParsePattern(char *pattern, struct rte_flow_item **items);
 
-#endif /* SURICATA_RTE_FLOW_RULES_H */
+#endif /* SURICATA_RTE_FLOW_RULES_PATTERN_H */
+/**
+ * @}
+ */
