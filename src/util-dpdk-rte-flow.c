@@ -150,7 +150,11 @@ int CreateRules(int port_id, RuleStorage *rule_storage) {
         SCLogInfo("Entering ParsePattern");
         ParsePattern(rule_storage->rules[i], &items);
 
-
+        int i = 0;
+        while (items[i].type != RTE_FLOW_ITEM_TYPE_END) {
+            i++;
+            SCLogInfo("item num: %i", items[i].type);
+        }
         flow = rte_flow_create(port_id, &attr, items, action, &flow_error);
 
         if (flow == NULL) {

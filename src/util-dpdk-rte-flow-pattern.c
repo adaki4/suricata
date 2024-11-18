@@ -46,6 +46,21 @@ enum index {
 	START_SET,
 	END_SET,
 
+	/* Create tokens */
+	FLOW,
+	VC_INGRESS,
+	CREATE,
+
+	/* Action tokens */
+	ACTIONS,
+	ACTION_NEXT,
+	ACTION_END,
+	//ACTION_QUEUE,
+	ACTION_DROP,
+	//ACTION_COUNT,
+	//ACTION_NEXT,
+
+
     /* Common tokens. */
 	COMMON_INTEGER,
 	COMMON_UNSIGNED,
@@ -82,9 +97,9 @@ enum index {
 	ITEM_VOID,
 	ITEM_ANY,
 	ITEM_PORT_ID,
-	ITEM_RAW,
-    ITEM_RAW_SIZE,
+	//ITEM_RAW,
 	ITEM_ETH,
+    //ITEM_RAW_SIZE,
 	ITEM_VLAN,
 	ITEM_IPV4,
 	ITEM_IPV4_SRC,
@@ -129,8 +144,8 @@ static const enum index next_item[] = {
 	ITEM_VOID,
 	ITEM_ANY,
 	ITEM_PORT_ID,
-	ITEM_RAW,
-    ITEM_RAW_SIZE,
+	//ITEM_RAW,
+    //ITEM_RAW_SIZE,
 	ITEM_ETH,
 	ITEM_VLAN,
 	ITEM_IPV4,
@@ -179,6 +194,11 @@ static const enum index item_icmp[] = {
 	ZERO,
 };
 
+static const enum index item_vlan[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
 static const enum index item_udp[] = {
 	ITEM_UDP_SRC,
 	ITEM_UDP_DST,
@@ -199,6 +219,94 @@ static const enum index item_sctp[] = {
 	ITEM_NEXT,
 	ZERO,
 };
+
+static const enum index item_vxlan_gpe[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index next_vc_attr[] = {
+	VC_INGRESS,
+	ITEM_PATTERN,
+	ZERO,
+};
+
+static const enum index item_any[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_port_id[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_eth[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_vxlan[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_e_tag[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_mpls[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_nvgre[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_gre[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_gtp[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_fuzzy[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_gtpu[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_gtpc[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_geneve[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_icmp6[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index next_action[] = {
+	ACTION_END,
+	ACTION_DROP,
+	ZERO,
+};
+
 
 /** Maximum number of subsequent tokens and arguments on the stack. */
 #define CTX_STACK_SIZE 16
@@ -228,6 +336,27 @@ static const enum index item_sctp[] = {
 		.size = s, \
 	})
 
+/** Private data for actions. */
+struct parse_action_priv {
+	enum rte_flow_action_type type; /**< Action type. */
+	uint32_t size; /**< Size of action configuration structure. */
+};
+
+#define PRIV_ACTION(t, s) \
+	(&(const struct parse_action_priv){ \
+		.type = RTE_FLOW_ACTION_TYPE_ ## t, \
+		.size = s, \
+	})
+
+/** Static initializer for the args field. */
+#define ARGS(...) (const struct arg *const []){ __VA_ARGS__, NULL, }
+
+/** Static initializer for ARGS() to target a field. */
+#define ARGS_ENTRY(s, f) \
+	(&(const struct arg){ \
+		.offset = offsetof(s, f), \
+		.size = sizeof(((s *)0)->f), \
+	})
 
 /** Static initializer for the next field. */
 #define NEXT(...) (const enum index *const []){ __VA_ARGS__, NULL, }
@@ -247,16 +376,69 @@ struct arg {
 	const uint8_t *mask; /**< Bit-mask to use instead of offset/size. */
 };
 
-/** Parser output buffer layout expected by cmd_flow_parsed(). */
+enum rte_flow_query_update_mode {
+	RTE_FLOW_QU_QUERY_FIRST = 1,  /**< Query before update. */
+	RTE_FLOW_QU_UPDATE_FIRST,     /**< Query after  update. */
+};
+
+struct tunnel_ops {
+	uint32_t id;
+	char type[16];
+	uint32_t enabled:1;
+	uint32_t actions:1;
+	uint32_t items:1;
+};
+
+enum rte_flow_encap_hash_field {
+	/** Calculate hash placed in UDP source port field. */
+	RTE_FLOW_ENCAP_HASH_FIELD_SRC_PORT,
+	/** Calculate hash placed in NVGRE flow ID field. */
+	RTE_FLOW_ENCAP_HASH_FIELD_NVGRE_FLOW_ID,
+};
+
+
 struct buffer {
+	enum index command; /**< Flow command. */
+	uint16_t port; /**< Affected port ID. */
+	uint16_t queue; /** Async queue ID. */
 	bool postpone; /** Postpone async operation */
 	union {
+		struct {
+			struct rte_flow_port_attr port_attr;
+			uint32_t nb_queue;
+			struct rte_flow_queue_attr queue_attr;
+		} configure; /**< Configuration arguments. */
+		struct {
+			uint32_t *template_id;
+			uint32_t template_id_n;
+		} templ_destroy; /**< Template destroy arguments. */
+		struct {
+			uint32_t id;
+			struct rte_flow_template_table_attr attr;
+			uint32_t *pat_templ_id;
+			uint32_t pat_templ_id_n;
+			uint32_t *act_templ_id;
+			uint32_t act_templ_id_n;
+		} table; /**< Table arguments. */
+		struct {
+			uint32_t *table_id;
+			uint32_t table_id_n;
+		} table_destroy; /**< Template destroy arguments. */
+		struct {
+			uint32_t *action_id;
+			uint32_t action_id_n;
+		} ia_destroy; /**< Indirect action destroy arguments. */
+		struct {
+			uint32_t action_id;
+			enum rte_flow_query_update_mode qu_mode;
+		} ia; /* Indirect action query arguments */
 		struct {
 			uint32_t table_id;
 			uint32_t pat_templ_id;
 			uint32_t rule_id;
 			uint32_t act_templ_id;
 			struct rte_flow_attr attr;
+			struct tunnel_ops tunnel_ops;
 			uintptr_t user_id;
 			struct rte_flow_item *pattern;
 			struct rte_flow_action *actions;
@@ -264,10 +446,46 @@ struct buffer {
 			uint32_t pattern_n;
 			uint32_t actions_n;
 			uint8_t *data;
+			enum rte_flow_encap_hash_field field;
 			uint8_t encap_hash;
 		} vc; /**< Validate/create arguments. */
+		struct {
+			uint64_t *rule;
+			uint64_t rule_n;
+			bool is_user_id;
+		} destroy; /**< Destroy arguments. */
+		struct {
+			char file[128];
+			bool mode;
+			uint64_t rule;
+			bool is_user_id;
+		} dump; /**< Dump arguments. */
+		struct {
+			uint64_t rule;
+			struct rte_flow_action action;
+			bool is_user_id;
+		} query; /**< Query arguments. */
+		struct {
+			uint32_t *group;
+			uint32_t group_n;
+		} list; /**< List arguments. */
+		struct {
+			int set;
+		} isolate; /**< Isolated mode arguments. */
+		struct {
+			int destroy;
+		} aged; /**< Aged arguments. */
+		struct {
+			uint32_t policy_id;
+		} policy;/**< Policy arguments. */
+		struct {
+			uint16_t token;
+			uintptr_t uintptr;
+			char filename[128];
+		} flex; /**< Flex arguments*/
 	} args; /**< Command arguments. */
 };
+
 
 /** Parser context. */
 struct context {
@@ -281,6 +499,7 @@ struct context {
 	int args_num; /**< Number of entries in args[]. */
 	uint32_t eol:1; /**< EOL has been detected. */
 	uint32_t last:1; /**< No more arguments. */
+	uint16_t port; /**< Current port ID (for completions). */
 	uint32_t objdata; /**< Object-specific data. */
 	void *object; /**< Address of current object for relative offsets. */
 	void *objmask; /**< Object a full mask must be written to. */
@@ -342,13 +561,85 @@ static int parse_vc(struct context *, const struct token *,
 		    void *, unsigned int);
 static int parse_vc_spec(struct context *, const struct token *,
 			 const char *, unsigned int, void *, unsigned int);
+static int parse_init(struct context *, const struct token *,
+		      const char *, unsigned int,
+		      void *, unsigned int);
+static int parse_port(struct context *, const struct token *,
+		      const char *, unsigned int,
+		      void *, unsigned int);
+static int parse_int(struct context *, const struct token *,
+		     const char *, unsigned int,
+		     void *, unsigned int);
+static int
+parse_ipv4_addr(struct context *ctx, const struct token *token,
+		const char *str, unsigned int len,
+		void *buf, unsigned int size);
+
+static int
+parse_default(struct context *ctx, const struct token *token,
+	      const char *str, unsigned int len,
+	      void *buf, unsigned int size);
 
 static const struct token token_list[] = {
 
 	[ZERO] = {
 		.name = "ZERO",
-		.next = NEXT(NEXT_ENTRY(ITEM_PATTERN)),
+		.next = NEXT(NEXT_ENTRY(FLOW)),
 	},
+
+	/* Top-level command. */
+	[FLOW] = {
+		.name = "flow",
+		.type = "{command} {port_id} [{arg} [...]]",
+		.next = NEXT(NEXT_ENTRY(CREATE)),
+		.call = parse_init,
+	},
+	[CREATE] = {
+		.name = "create",
+		.next = NEXT(next_vc_attr, NEXT_ENTRY(COMMON_PORT_ID)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, port)),
+		.call = parse_vc,
+	},
+	[COMMON_PORT_ID] = {
+		.name = "{port_id}",
+		.type = "PORT ID",
+		.call = parse_port,
+	},
+	[VC_INGRESS] = {
+		.name = "ingress",
+		.next = NEXT(next_vc_attr),
+		.call = parse_vc,
+	},
+
+	[ACTION_DROP] = {
+		.name = "drop",
+		.priv = PRIV_ACTION(DROP, 0),
+		.next = NEXT(NEXT_ENTRY(ACTION_END)),
+		.call = parse_vc,
+	},
+	
+	[COMMON_IPV4_ADDR] = {
+		.name = "{IPv4 address}",
+		.type = "IPV4 ADDRESS",
+		.call = parse_ipv4_addr,
+	},
+
+	/* Validate/create actions. */
+	[ACTIONS] = {
+		.name = "actions",
+		.next = NEXT(next_action),
+		.call = parse_vc,
+	},
+	[ACTION_NEXT] = {
+		.name = "/",
+		.next = NEXT(next_action),
+	},
+	[ACTION_END] = {
+		.name = "end",
+		.priv = PRIV_ACTION(END, 0),
+		.call = parse_vc,
+	},
+
 	[ITEM_PATTERN] = {
 		.name = "pattern",
 		.next = NEXT(next_item),
@@ -383,7 +674,7 @@ static const struct token token_list[] = {
     [ITEM_END] = {
 		.name = "end",
 		.priv = PRIV_ITEM(END, 0),
-		.next = NEXT(NEXT_ENTRY(END)),
+		.next = NEXT(NEXT_ENTRY(ACTIONS, END)),
 		.call = parse_vc,
 	},
 	[ITEM_VOID] = {
@@ -398,7 +689,7 @@ static const struct token token_list[] = {
 		.name = "any",
 		
 		.priv = PRIV_ITEM(ANY, sizeof(struct rte_flow_item_any)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_any),
 		.call = parse_vc,
 	},
 	[ITEM_PORT_ID] = {
@@ -406,28 +697,28 @@ static const struct token token_list[] = {
 		
 		.priv = PRIV_ITEM(PORT_ID,
 				  sizeof(struct rte_flow_item_port_id)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_port_id),
 		.call = parse_vc,
 	},
-	[ITEM_RAW] = {
-		.name = "raw",
+	// [ITEM_RAW] = {
+	// 	.name = "raw",
 		
-		.priv = PRIV_ITEM(RAW, ITEM_RAW_SIZE),
-		.next = NEXT(next_item),
-		.call = parse_vc,
-	},
+	// 	.priv = PRIV_ITEM(RAW, ITEM_RAW_SIZE),
+	// 	.next = NEXT(next_item),
+	// 	.call = parse_vc,
+	// },
 	[ITEM_ETH] = {
 		.name = "eth",
 		
 		.priv = PRIV_ITEM(ETH, sizeof(struct rte_flow_item_eth)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_eth),
 		.call = parse_vc,
 	},
 	[ITEM_VLAN] = {
 		.name = "vlan",
 		
 		.priv = PRIV_ITEM(VLAN, sizeof(struct rte_flow_item_vlan)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_vlan),
 		.call = parse_vc,
 	},
 	[ITEM_IPV4] = {
@@ -553,35 +844,35 @@ static const struct token token_list[] = {
 		.name = "vxlan",
 		
 		.priv = PRIV_ITEM(VXLAN, sizeof(struct rte_flow_item_vxlan)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_vxlan),
 		.call = parse_vc,
 	},
 	[ITEM_E_TAG] = {
 		.name = "e_tag",
 		
 		.priv = PRIV_ITEM(E_TAG, sizeof(struct rte_flow_item_e_tag)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_e_tag),
 		.call = parse_vc,
 	},
 	[ITEM_NVGRE] = {
 		.name = "nvgre",
 		
 		.priv = PRIV_ITEM(NVGRE, sizeof(struct rte_flow_item_nvgre)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_nvgre),
 		.call = parse_vc,
 	},
 	[ITEM_MPLS] = {
 		.name = "mpls",
 		
 		.priv = PRIV_ITEM(MPLS, sizeof(struct rte_flow_item_mpls)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_mpls),
 		.call = parse_vc,
 	},
 	[ITEM_GRE] = {
 		.name = "gre",
 		
 		.priv = PRIV_ITEM(GRE, sizeof(struct rte_flow_item_gre)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_gre),
 		.call = parse_vc,
 	},
 	[ITEM_FUZZY] = {
@@ -589,7 +880,7 @@ static const struct token token_list[] = {
 		
 		.priv = PRIV_ITEM(FUZZY,
 				sizeof(struct rte_flow_item_fuzzy)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_fuzzy),
 		.call = parse_vc,
 	},
 
@@ -597,7 +888,7 @@ static const struct token token_list[] = {
 		.name = "gtp",
 		
 		.priv = PRIV_ITEM(GTP, sizeof(struct rte_flow_item_gtp)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_gtp),
 		.call = parse_vc,
 	},
 
@@ -605,21 +896,21 @@ static const struct token token_list[] = {
 		.name = "gtpc",
 		
 		.priv = PRIV_ITEM(GTPC, sizeof(struct rte_flow_item_gtp)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_gtpc),
 		.call = parse_vc,
 	},
 	[ITEM_GTPU] = {
 		.name = "gtpu",
 		
 		.priv = PRIV_ITEM(GTPU, sizeof(struct rte_flow_item_gtp)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_gtpu),
 		.call = parse_vc,
 	},
 	[ITEM_GENEVE] = {
 		.name = "geneve",
 		
 		.priv = PRIV_ITEM(GENEVE, sizeof(struct rte_flow_item_geneve)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_geneve),
 		.call = parse_vc,
 	},
 	[ITEM_VXLAN_GPE] = {
@@ -627,7 +918,7 @@ static const struct token token_list[] = {
 		
 		.priv = PRIV_ITEM(VXLAN_GPE,
 				  sizeof(struct rte_flow_item_vxlan_gpe)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_vxlan_gpe),
 		.call = parse_vc,
 	},
 
@@ -635,7 +926,7 @@ static const struct token token_list[] = {
 		.name = "icmp6",
 		
 		.priv = PRIV_ITEM(ICMP6, sizeof(struct rte_flow_item_icmp6)),
-		.next = NEXT(next_item),
+		.next = NEXT(item_icmp6),
 		.call = parse_vc,
 	},
 
@@ -710,6 +1001,62 @@ flow_item_default_mask(const struct rte_flow_item *item)
 	return mask;
 }
 
+/** Remove and return last entry from argument stack. */
+static const struct arg *
+pop_args(struct context *ctx)
+{
+	return ctx->args_num ? ctx->args[--ctx->args_num] : NULL;
+}
+
+/** Add entry on top of the argument stack. */
+static int
+push_args(struct context *ctx, const struct arg *arg)
+{
+	if (ctx->args_num == CTX_STACK_SIZE)
+		return -1;
+	ctx->args[ctx->args_num++] = arg;
+	return 0;
+}
+
+/** Spread value into buffer according to bit-mask. */
+static size_t
+arg_entry_bf_fill(void *dst, uintmax_t val, const struct arg *arg)
+{
+	uint32_t i = arg->size;
+	uint32_t end = 0;
+	int sub = 1;
+	int add = 0;
+	size_t len = 0;
+
+	if (!arg->mask)
+		return 0;
+#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
+	if (!arg->hton) {
+		i = 0;
+		end = arg->size;
+		sub = 0;
+		add = 1;
+	}
+#endif
+	while (i != end) {
+		unsigned int shift = 0;
+		uint8_t *buf = (uint8_t *)dst + arg->offset + (i -= sub);
+
+		for (shift = 0; arg->mask[i] >> shift; ++shift) {
+			if (!(arg->mask[i] & (1 << shift)))
+				continue;
+			++len;
+			if (!dst)
+				continue;
+			*buf &= ~(1 << shift);
+			*buf |= (val & 1) << shift;
+			val >>= 1;
+		}
+		i += add;
+	}
+	return len;
+}
+
 /** Compare a string with a partial one of a given length. */
 static int
 strcmp_partial(const char *full, const char *partial, size_t partial_len)
@@ -721,6 +1068,186 @@ strcmp_partial(const char *full, const char *partial, size_t partial_len)
 	if (strlen(full) <= partial_len)
 		return 0;
 	return full[partial_len];
+}
+
+/** Parse flow command, initialize output buffer for subsequent tokens. */
+static int
+parse_init(struct context *ctx, const struct token *token,
+	   const char *str, unsigned int len,
+	   void *buf, unsigned int size)
+{
+	struct buffer *out = buf;
+
+	/* Token name must match. */
+	if (parse_default(ctx, token, str, len, NULL, 0) < 0)
+		return -1;
+	/* Nothing else to do if there is no buffer. */
+	if (!out)
+		return len;
+	/* Make sure buffer is large enough. */
+	if (size < sizeof(*out))
+		return -1;
+	/* Initialize buffer. */
+	memset(out, 0x00, sizeof(*out));
+	memset((uint8_t *)out + sizeof(*out), 0x22, size - sizeof(*out));
+	ctx->objdata = 0;
+	ctx->object = out;
+	ctx->objmask = NULL;
+	return len;
+}
+
+
+/**
+ * Parse an IPv4 address.
+ *
+ * Last argument (ctx->args) is retrieved to determine storage size and
+ * location.
+ */
+static int
+parse_ipv4_addr(struct context *ctx, const struct token *token,
+		const char *str, unsigned int len,
+		void *buf, unsigned int size)
+{
+	const struct arg *arg = pop_args(ctx);
+	char str2[len + 1];
+	struct in_addr tmp;
+	int ret;
+
+	/* Argument is expected. */
+	if (!arg)
+		return -1;
+	size = arg->size;
+	/* Bit-mask fill is not supported. */
+	if (arg->mask || size != sizeof(tmp))
+		goto error;
+	/* Only network endian is supported. */
+	if (!arg->hton)
+		goto error;
+	memcpy(str2, str, len);
+	str2[len] = '\0';
+	ret = inet_pton(AF_INET, str2, &tmp);
+	if (ret != 1) {
+		/* Attempt integer parsing. */
+		push_args(ctx, arg);
+		return parse_int(ctx, token, str, len, buf, size);
+	}
+	if (!ctx->object)
+		return len;
+	buf = (uint8_t *)ctx->object + arg->offset;
+	memcpy(buf, &tmp, size);
+	if (ctx->objmask)
+		memset((uint8_t *)ctx->objmask + arg->offset, 0xff, size);
+	return len;
+error:
+	push_args(ctx, arg);
+	return -1;
+}
+
+/**
+ * Parse signed/unsigned integers 8 to 64-bit long.
+ *
+ * Last argument (ctx->args) is retrieved to determine integer type and
+ * storage location.
+ */
+static int
+parse_int(struct context *ctx, const struct token *token,
+	  const char *str, unsigned int len,
+	  void *buf, unsigned int size)
+{
+	const struct arg *arg = pop_args(ctx);
+	uintmax_t u;
+	char *end;
+
+	(void)token;
+	/* Argument is expected. */
+	if (!arg)
+		return -1;
+	errno = 0;
+	u = arg->sign ?
+		(uintmax_t)strtoimax(str, &end, 0) :
+		strtoumax(str, &end, 0);
+	if (errno || (size_t)(end - str) != len)
+		goto error;
+	if (arg->bounded &&
+	    ((arg->sign && ((intmax_t)u < (intmax_t)arg->min ||
+			    (intmax_t)u > (intmax_t)arg->max)) ||
+	     (!arg->sign && (u < arg->min || u > arg->max))))
+		goto error;
+	if (!ctx->object)
+		return len;
+	if (arg->mask) {
+		if (!arg_entry_bf_fill(ctx->object, u, arg) ||
+		    !arg_entry_bf_fill(ctx->objmask, -1, arg))
+			goto error;
+		return len;
+	}
+	buf = (uint8_t *)ctx->object + arg->offset;
+	size = arg->size;
+	if (u > RTE_LEN2MASK(size * CHAR_BIT, uint64_t))
+		return -1;
+objmask:
+	switch (size) {
+	case sizeof(uint8_t):
+		*(uint8_t *)buf = u;
+		break;
+	case sizeof(uint16_t):
+		*(uint16_t *)buf = arg->hton ? rte_cpu_to_be_16(u) : u;
+		break;
+	case sizeof(uint8_t [3]):
+#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
+		if (!arg->hton) {
+			((uint8_t *)buf)[0] = u;
+			((uint8_t *)buf)[1] = u >> 8;
+			((uint8_t *)buf)[2] = u >> 16;
+			break;
+		}
+#endif
+		((uint8_t *)buf)[0] = u >> 16;
+		((uint8_t *)buf)[1] = u >> 8;
+		((uint8_t *)buf)[2] = u;
+		break;
+	case sizeof(uint32_t):
+		*(uint32_t *)buf = arg->hton ? rte_cpu_to_be_32(u) : u;
+		break;
+	case sizeof(uint64_t):
+		*(uint64_t *)buf = arg->hton ? rte_cpu_to_be_64(u) : u;
+		break;
+	default:
+		goto error;
+	}
+	if (ctx->objmask && buf != (uint8_t *)ctx->objmask + arg->offset) {
+		u = -1;
+		buf = (uint8_t *)ctx->objmask + arg->offset;
+		goto objmask;
+	}
+	return len;
+error:
+	push_args(ctx, arg);
+	return -1;
+}
+
+static int
+parse_port(struct context *ctx, const struct token *token,
+	   const char *str, unsigned int len,
+	   void *buf, unsigned int size)
+{
+	struct buffer *out = &(struct buffer){ .port = 0 };
+	int ret;
+
+	if (buf)
+		out = buf;
+	else {
+		ctx->objdata = 0;
+		ctx->object = out;
+		ctx->objmask = NULL;
+		size = sizeof(*out);
+	}
+	ret = parse_int(ctx, token, str, len, out, size);
+	if (ret >= 0)
+		ctx->port = out->port;
+	if (!buf)
+		ctx->object = NULL;
+	return ret;
 }
 
 /** Default parsing function for token name matching. */
@@ -753,8 +1280,24 @@ parse_vc(struct context *ctx, const struct token *token,
 	/* Nothing else to do if there is no buffer. */
 	if (!out)
 		return len;
+	if (!out->command) {
+		if (ctx->curr != CREATE)
+			return -1;
+		if (sizeof(*out) > size)
+			return -1;
+		out->command = ctx->curr;
+		ctx->objdata = 0;
+		ctx->object = out;
+		ctx->objmask = NULL;
+		out->args.vc.data = (uint8_t *)out + size;
+		return len;
+	}
 	ctx->objdata = 0;
 	ctx->objmask = NULL;
+	if (ctx->curr == VC_INGRESS) {
+		out->args.vc.attr.ingress = 1;
+		return len;
+	}
 	ctx->object = &out->args.vc.attr;
 	if (ctx->curr == ITEM_PATTERN) {
 		out->args.vc.pattern =
@@ -765,8 +1308,22 @@ parse_vc(struct context *ctx, const struct token *token,
 		return len;
 	}
 	if (ctx->curr == ITEM_END) {
-		return -1;
-	if (!token->priv)
+		if ( out->command == CREATE && ctx->last)
+			return -1;
+	}
+	if (ctx->curr == ACTIONS) {
+		out->args.vc.actions = out->args.vc.pattern ?
+			(void *)RTE_ALIGN_CEIL((uintptr_t)
+					       (out->args.vc.pattern +
+						out->args.vc.pattern_n),
+					       sizeof(double)) :
+			(void *)RTE_ALIGN_CEIL((uintptr_t)(out + 1),
+					       sizeof(double));
+		ctx->object = out->args.vc.actions;
+		ctx->objmask = NULL;
+		return len;
+	}
+	if (!token->priv) {
 		return -1;
 	}
 	if (!out->args.vc.actions) {
@@ -785,6 +1342,24 @@ parse_vc(struct context *ctx, const struct token *token,
 		};
 		++out->args.vc.pattern_n;
 		ctx->object = item;
+		ctx->objmask = NULL;
+	} else {
+		const struct parse_action_priv *priv = token->priv;
+		struct rte_flow_action *action =
+			out->args.vc.actions + out->args.vc.actions_n;
+
+		data_size = priv->size; /* configuration */
+		data = (void *)RTE_ALIGN_FLOOR((uintptr_t)
+					       (out->args.vc.data - data_size),
+					       sizeof(double));
+		if ((uint8_t *)action + sizeof(*action) > data)
+			return -1;
+		*action = (struct rte_flow_action){
+			.type = priv->type,
+			.conf = data_size ? data : NULL,
+		};
+		++out->args.vc.actions_n;
+		ctx->object = action;
 		ctx->objmask = NULL;
 	}
 	memset(data, 0, data_size);
@@ -854,7 +1429,6 @@ static int
 cmd_flow_parse(const char *src, void *result,
 	       unsigned int size)
 {
-    SCLogInfo("Entering cmd_flow_parse");
 	struct context *ctx = &cmd_flow_context;
 	const struct token *token;
 	const enum index *list;
