@@ -638,7 +638,7 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
 
         // some PMDs requires additional actions only after the device has started
         DevicePostStartPMDSpecificActions(ptv, dev_info.driver_name);
-        CreateRules(dpdk_config->port_id, &dpdk_config->drop_filter);
+        CreateRules(dpdk_config->iface, dpdk_config->port_id, &dpdk_config->drop_filter);
 
         uint16_t inconsistent_numa_cnt = SC_ATOMIC_GET(dpdk_config->inconsistent_numa_cnt);
         if (inconsistent_numa_cnt > 0 && ptv->port_socket_id != SOCKET_ID_ANY) {
