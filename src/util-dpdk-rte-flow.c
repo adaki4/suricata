@@ -34,7 +34,9 @@
 #include "util-dpdk.h"
 #include "util-dpdk-rte-flow.h"
 #include "util-dpdk-rte-flow-pattern.h"
+#include "rte_flow.h"
 #include "runmode-dpdk.h"
+#include "unistd.h"
 
 #ifdef HAVE_DPDK
 // static void* TokenizeRules(RuleStorage *rule_storage);
@@ -134,28 +136,137 @@ int ConfigLoadRTEFlowRules(ConfNode *if_root, ConfNode *if_default, const char *
     SCReturnInt(0);
 }
 
+static void create_manual(struct rte_flow_item_ipv4 *item) {
+    const char *ip_src = "192.11.20.3";
+    char src[sizeof(struct in_addr)]; 
+    inet_pton(AF_INET, ip_src, src);
+    memcpy(&item->hdr.src_addr, src, sizeof(in_addr_t));
+}
+
+static void create_manual_mask(struct rte_flow_item_ipv4 *item) {
+    const char *ip_src = "255.255.255.0";
+    char src[sizeof(struct in_addr)]; 
+    inet_pton(AF_INET, ip_src, src);
+    memcpy(&item->hdr.src_addr, src, sizeof(in_addr_t));
+}
+
+void hexDump (
+    const char * desc,
+    const void * addr,
+    const int len,
+    int perLine
+) {
+    // Silently ignore silly per-line values.
+
+    if (perLine < 4 || perLine > 64) perLine = 16;
+
+    int i;
+    unsigned char buff[perLine+1];
+    const unsigned char * pc = (const unsigned char *)addr;
+
+    // Output description if given.
+
+    if (desc != NULL) printf ("%s:\n", desc);
+
+    // Length checks.
+
+    if (len == 0) {
+        printf("  ZERO LENGTH\n");
+        return;
+    }
+    if (len < 0) {
+        printf("  NEGATIVE LENGTH: %d\n", len);
+        return;
+    }
+
+    // Process every byte in the data.
+
+    for (i = 0; i < len; i++) {
+        // Multiple of perLine means new or first line (with line offset).
+
+        if ((i % perLine) == 0) {
+            // Only print previous-line ASCII buffer for lines beyond first.
+
+            if (i != 0) printf ("  %s\n", buff);
+
+            // Output the offset of current line.
+
+            printf ("  %04x ", i);
+        }
+
+        // Now the hex code for the specific character.
+
+        printf (" %02x", pc[i]);
+
+        // And buffer a printable ASCII character for later.
+
+        if ((pc[i] < 0x20) || (pc[i] > 0x7e)) // isprint() may be better.
+            buff[i % perLine] = '.';
+        else
+            buff[i % perLine] = pc[i];
+        buff[(i % perLine) + 1] = '\0';
+    }
+
+    // Pad out last line if not exactly perLine characters.
+
+    while ((i % perLine) != 0) {
+        printf ("   ");
+        i++;
+    }
+
+    // And print the final ASCII buffer.
+
+    printf ("  %s\n", buff);
+}
+
+static void
+ipv4_hdr_print(struct rte_flow_item_ipv4 *ipv4)
+{
+    SCLogInfo("The pattern ip adress is %x in hex", ipv4->hdr.src_addr);
+}
 
 int CreateRules(int port_id, RuleStorage *rule_storage) {
-    SCLogInfo("Entering CreateRules");
-    //SCLogInfo("number or rules %i", rule_storage->curr_rule_count);
     for (int i = 0; i < rule_storage->curr_rule_count; i++) {
-        struct rte_flow_item *items;
+        struct rte_flow_item *items = { 0 };
         struct rte_flow_attr attr = { 0 };
         struct rte_flow_action action[] = { { 0 }, { 0 } };
         struct rte_flow *flow;
         struct rte_flow_error flow_error = { 0 };
-    
+        uint32_t items_n = 0;
+
         attr.ingress = 1;
         action->type = RTE_FLOW_ACTION_TYPE_DROP;
-        SCLogInfo("Entering ParsePattern");
-        ParsePattern(rule_storage->rules[i], &items);
-
-        int i = 0;
-        while (items[i].type != RTE_FLOW_ITEM_TYPE_END) {
-            i++;
-            SCLogInfo("item num: %i", items[i].type);
+        ParsePattern(rule_storage->rules[i], &items, &items_n);
+        struct rte_flow_item pattern[items_n];
+        for (int i = 0; i < items_n; i++) {
+            memset(&pattern[i], 0, sizeof(struct rte_flow_item));
         }
-        flow = rte_flow_create(port_id, &attr, items, action, &flow_error);
+        struct rte_flow_item_ipv4 ipv4_spec = { 0 };
+        struct rte_flow_item_ipv4 ipv4_mask = { 0 };
+        struct rte_flow_item_ipv4 ipv4_last = { 0 };
+        
+        for (uint32_t i = 0; i < items_n; ++i) {
+            pattern[i].type = items[i].type;
+            if (items[i].type == RTE_FLOW_ITEM_TYPE_IPV4) {
+                memcpy(&ipv4_spec, items[i].spec, sizeof(struct rte_flow_item_ipv4));
+                memcpy(&ipv4_mask, items[i].mask, sizeof(struct rte_flow_item_ipv4));
+                pattern[i].spec = &ipv4_spec;
+                pattern[i].mask = &ipv4_mask;
+            }
+        }
+
+        struct rte_flow_item_ipv4 ipv4_hdr_manual = { 0 };
+        struct rte_flow_item_ipv4 ipv4_hdr_manual_mask = { 0 };
+
+        //memcpy(&ipv4_hdr_manual, &ipv4_hdr_spec, sizeof(struct rte_flow_item_ipv4));
+        //create_manual(&ipv4_hdr_manual);
+        //create_manual_mask(&ipv4_hdr_manual_mask);
+        ipv4_hdr_print(items[1].spec);
+        ipv4_hdr_print(pattern[1].spec);
+
+
+
+        flow = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
 
         if (flow == NULL) {
             SCLogError("Error when creating rte_flow rule on: %s", flow_error.message);
@@ -166,7 +277,10 @@ int CreateRules(int port_id, RuleStorage *rule_storage) {
         } else {
             SCLogInfo("RTE_FLOW flow rule created for port ");
         }
+
     }
+
+    
     RuleStorageFree(rule_storage);
 
     return 0;

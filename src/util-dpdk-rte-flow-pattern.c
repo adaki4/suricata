@@ -97,9 +97,8 @@ enum index {
 	ITEM_VOID,
 	ITEM_ANY,
 	ITEM_PORT_ID,
-	//ITEM_RAW,
 	ITEM_ETH,
-    //ITEM_RAW_SIZE,
+	ITEM_RAW,
 	ITEM_VLAN,
 	ITEM_IPV4,
 	ITEM_IPV4_SRC,
@@ -144,8 +143,7 @@ static const enum index next_item[] = {
 	ITEM_VOID,
 	ITEM_ANY,
 	ITEM_PORT_ID,
-	//ITEM_RAW,
-    //ITEM_RAW_SIZE,
+	ITEM_RAW,
 	ITEM_ETH,
 	ITEM_VLAN,
 	ITEM_IPV4,
@@ -301,6 +299,11 @@ static const enum index item_icmp6[] = {
 	ZERO,
 };
 
+static const enum index item_raw[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
 static const enum index next_action[] = {
 	ACTION_END,
 	ACTION_DROP,
@@ -310,6 +313,9 @@ static const enum index next_action[] = {
 
 /** Maximum number of subsequent tokens and arguments on the stack. */
 #define CTX_STACK_SIZE 16
+
+/** Maximum size for pattern in struct rte_flow_item_raw. */
+#define ITEM_RAW_PATTERN_SIZE 512
 
 /** Static initializer for the args field. */
 #define ARGS(...) (const struct arg *const []){ __VA_ARGS__, NULL, }
@@ -363,6 +369,10 @@ struct parse_action_priv {
 
 /** Static initializer for a NEXT() entry. */
 #define NEXT_ENTRY(...) (const enum index []){ __VA_ARGS__, ZERO, }
+
+/** Storage size for struct rte_flow_item_raw including pattern. */
+#define ITEM_RAW_SIZE \
+	(sizeof(struct rte_flow_item_raw) + ITEM_RAW_PATTERN_SIZE)
 
 /** Token argument. */
 struct arg {
@@ -700,13 +710,13 @@ static const struct token token_list[] = {
 		.next = NEXT(item_port_id),
 		.call = parse_vc,
 	},
-	// [ITEM_RAW] = {
-	// 	.name = "raw",
+	[ITEM_RAW] = {
+		.name = "raw",
 		
-	// 	.priv = PRIV_ITEM(RAW, ITEM_RAW_SIZE),
-	// 	.next = NEXT(next_item),
-	// 	.call = parse_vc,
-	// },
+		.priv = PRIV_ITEM(RAW, ITEM_RAW_SIZE),
+		.next = NEXT(item_raw),
+		.call = parse_vc,
+	},
 	[ITEM_ETH] = {
 		.name = "eth",
 		
@@ -1293,25 +1303,28 @@ parse_vc(struct context *ctx, const struct token *token,
 		return len;
 	}
 	ctx->objdata = 0;
+	switch (ctx->curr) {
+	default:
+		ctx->object = &out->args.vc.attr;
+		break;
+	}
 	ctx->objmask = NULL;
-	if (ctx->curr == VC_INGRESS) {
+	switch (ctx->curr) {
+	case VC_INGRESS:
 		out->args.vc.attr.ingress = 1;
 		return len;
-	}
-	ctx->object = &out->args.vc.attr;
-	if (ctx->curr == ITEM_PATTERN) {
+	case ITEM_PATTERN:
 		out->args.vc.pattern =
 			(void *)RTE_ALIGN_CEIL((uintptr_t)(out + 1),
-							sizeof(double));
+					       sizeof(double));
 		ctx->object = out->args.vc.pattern;
 		ctx->objmask = NULL;
 		return len;
-	}
-	if (ctx->curr == ITEM_END) {
+	case ITEM_END:
 		if ( out->command == CREATE && ctx->last)
 			return -1;
-	}
-	if (ctx->curr == ACTIONS) {
+		break;
+	case ACTIONS:
 		out->args.vc.actions = out->args.vc.pattern ?
 			(void *)RTE_ALIGN_CEIL((uintptr_t)
 					       (out->args.vc.pattern +
@@ -1322,9 +1335,10 @@ parse_vc(struct context *ctx, const struct token *token,
 		ctx->object = out->args.vc.actions;
 		ctx->objmask = NULL;
 		return len;
-	}
-	if (!token->priv) {
-		return -1;
+	default:
+		if (!token->priv)
+			return -1;
+		break;
 	}
 	if (!out->args.vc.actions) {
 		const struct parse_item_priv *priv = token->priv;
@@ -1502,7 +1516,7 @@ cmd_flow_parse(const char *src, void *result,
 
 static int
 flow_parse(const char *src, void *result, unsigned int size,
-	   struct rte_flow_item **pattern)
+	   struct rte_flow_item **pattern, uint32_t *pattern_item_count)
 {
     SCLogInfo("Entering flow_parse");
 	int ret;
@@ -1522,12 +1536,14 @@ flow_parse(const char *src, void *result, unsigned int size,
 	} while (ret > 0 && strlen(src));
 	cmd_flow_context = saved_flow_ctx;
 	*pattern = ((struct buffer *)result)->args.vc.pattern;
+	*pattern_item_count = ((struct buffer *)result)->args.vc.pattern_n;
+
 	return (ret >= 0 && !strlen(src)) ? 0 : -1;
 }
 
-int ParsePattern(char *pattern, struct rte_flow_item **items) {
-    uint8_t data[1024] = {};
-    flow_parse(pattern, (void *)data, sizeof(data), items);
+int ParsePattern(char *pattern, struct rte_flow_item **items, uint32_t *items_n) {
+    uint8_t data[1024] = { 0 };
+    flow_parse(pattern, (void *)data, sizeof(data), items, items_n);
 }
 
 #endif /* HAVE_DPDK */

@@ -35,7 +35,7 @@
 #ifndef SURICATA_RTE_FLOW_RULES_PATTERN_H
 #define SURICATA_RTE_FLOW_RULES_PATTERN_H
 
-int ParsePattern(char *pattern, struct rte_flow_item **items);
+int ParsePattern(char *pattern, struct rte_flow_item **items, uint32_t *items_n);
 
 #endif /* SURICATA_RTE_FLOW_RULES_PATTERN_H */
 /**
