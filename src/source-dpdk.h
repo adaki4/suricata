@@ -79,7 +79,6 @@ typedef struct DPDKIfaceConfig_ {
     uint16_t nb_tx_desc;
     uint32_t mempool_size;
     uint32_t mempool_cache_size;
-    RuleStorage allow_filter;
     RuleStorage drop_filter;
     struct rte_mempool *pkt_mempool;
     SC_ATOMIC_DECLARE(unsigned int, ref);

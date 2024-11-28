@@ -199,7 +199,6 @@ static void DevicePostStartPMDSpecificActions(DPDKThreadVars *ptv, const char *d
     // and only after the start of the port
     if (strcmp(driver_name, "net_i40e") == 0)
         i40eDeviceSetRSS(ptv->port_id, ptv->threads);
-
 }
 
 static void DevicePreClosePMDSpecificActions(DPDKThreadVars *ptv, const char *driver_name)
@@ -638,7 +637,12 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
 
         // some PMDs requires additional actions only after the device has started
         DevicePostStartPMDSpecificActions(ptv, dev_info.driver_name);
-        CreateRules(dpdk_config->iface, dpdk_config->port_id, &dpdk_config->drop_filter);
+        retval = CreateRules(dpdk_config->iface, dpdk_config->port_id, &dpdk_config->drop_filter);
+        if (retval != 0) {
+            SCLogError("%s: error (%s) when creating rte_flow rules", dpdk_config->iface,
+                    rte_strerror(-retval));
+            goto fail;
+        }
 
         uint16_t inconsistent_numa_cnt = SC_ATOMIC_GET(dpdk_config->inconsistent_numa_cnt);
         if (inconsistent_numa_cnt > 0 && ptv->port_socket_id != SOCKET_ID_ANY) {

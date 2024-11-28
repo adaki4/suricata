@@ -130,8 +130,6 @@ static void DPDKDerefConfig(void *conf);
 #define DPDK_CONFIG_DEFAULT_COPY_MODE                   "none"
 #define DPDK_CONFIG_DEFAULT_COPY_INTERFACE              "none"
 #define DPDK_CONFIG_DEFAULT_DROP_FILTER                 "none"
-#define DPDK_CONFIG_DEFAULT_ALLOW_FILTER                "none"
-
 
 DPDKIfaceConfigAttributes dpdk_yaml = {
     .threads = "threads",
@@ -149,7 +147,6 @@ DPDKIfaceConfigAttributes dpdk_yaml = {
     .tx_descriptors = "tx-descriptors",
     .copy_mode = "copy-mode",
     .copy_iface = "copy-iface",
-    .allow_filter = "allow-filter",
     .drop_filter = "drop-filter",
 };
 
@@ -847,8 +844,10 @@ static int ConfigLoad(DPDKIfaceConfig *iconf, const char *iface)
     if (retval < 0)
         SCReturnInt(retval);
 
-    //ConfigLoadRTEFlowRules(if_root, if_default, dpdk_yaml.allow_filter, iconf);
-    ConfigLoadRTEFlowRules(if_root, if_default, dpdk_yaml.drop_filter, iconf);
+    retval =
+            ConfigLoadRTEFlowRules(if_root, if_default, dpdk_yaml.drop_filter, &iconf->drop_filter);
+    if (retval < 0)
+        SCReturnInt(retval);
 
     SCReturnInt(0);
 }

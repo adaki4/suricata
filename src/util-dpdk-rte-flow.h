@@ -33,11 +33,11 @@
 #include "decode.h"
 #include "source-dpdk.h"
 
-
 #ifndef SURICATA_RTE_FLOW_RULES_H
 #define SURICATA_RTE_FLOW_RULES_H
 
-int ConfigLoadRTEFlowRules(ConfNode *if_root, ConfNode *if_default, const char *filter_type, DPDKIfaceConfig *iconf);
+int ConfigLoadRTEFlowRules(ConfNode *if_root, ConfNode *if_default, const char *filter_type,
+        RuleStorage *rule_storage);
 int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage);
 
 #endif /* SURICATA_RTE_FLOW_RULES_H */
