@@ -51,13 +51,11 @@
  *
  */
 
-#include <cmdline_parse_etheraddr.h>
-
 #include "util-debug.h"
-#include "util-dpdk.h"
-#include "util-dpdk-rte-flow-pattern.h"
 
 #ifdef HAVE_DPDK
+#include <cmdline_parse_etheraddr.h>
+#include "util-dpdk-rte-flow-pattern.h"
 
 enum index {
     /* Special tokens. */
