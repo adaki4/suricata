@@ -30,9 +30,9 @@
  *
  */
 
+#include "decode.h"
 #include "runmode-dpdk.h"
 #include "util-debug.h"
-#include "util-dpdk.h"
 #include "util-dpdk-rte-flow.h"
 #include "util-dpdk-rte-flow-pattern.h"
 
@@ -158,14 +158,14 @@ static void iceDeviceError(struct rte_flow_item *items)
 /**
  * \brief Specify ambigous error messages as some drivers have specific
  * behaviour when creating rte_flow rules */
-static void DriverSpecificErrorMessage(char *driver_name, struct rte_flow_item *items)
+static void DriverSpecificErrorMessage(const char *driver_name, struct rte_flow_item *items)
 {
     if (strcmp(driver_name, "net_ice") == 0) {
         iceDeviceError(items);
     }
 }
 
-int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, char *driver_name)
+int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, const char *driver_name)
 {
     SCEnter();
     int failed_count = 0;
