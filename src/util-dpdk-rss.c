@@ -36,8 +36,20 @@
 
 #ifdef HAVE_DPDK
 
-struct rte_flow_action_rss DeviceInitRSSAction(struct rte_eth_rss_conf rss_conf, int nb_rx_queues,
-        uint16_t *queues, enum rte_eth_hash_function func, bool set_key)
+/**
+ * \brief Initialize RSS action configuration for 
+ *     RTE_FLOW RSS rule based on input arguments
+ * 
+ * \param rss_conf RSS configuration 
+ * \param nb_rx_queues number of rx queues
+ * \param queues array of queue indexes
+ * \param func RSS hash function 
+ * \param set_key flag to set RSS hash key and it's length
+ * \return struct rte_flow_action_rss RSS action configuration 
+ *     to be used in a rule
+ */
+struct rte_flow_action_rss DeviceInitRSSAction(struct rte_eth_rss_conf rss_conf, int nb_rx_queues, uint16_t *queues,
+        enum rte_eth_hash_function func, bool set_key)
 {
     struct rte_flow_action_rss rss_action_conf = { 0 };
     rss_action_conf.func = func;
@@ -61,12 +73,21 @@ struct rte_flow_action_rss DeviceInitRSSAction(struct rte_eth_rss_conf rss_conf,
     return rss_action_conf;
 }
 
-int DeviceCreateRSSFlowUniform(
+/**
+ * \brief Creates RTE_FLOW RSS rule used by NIC drivers
+ *     to redistribute packets to different queues based
+ *     on IP adresses. 
+ * 
+ * \param port_id The port identifier of the Ethernet device
+ * \param port_name The port name of the Ethernet device
+ * \param rss_conf RSS configuration 
+ * \return int 0 on success, a negative errno value otherwise
+ */
+int DeviceCreateRSSFlowGeneric(
         int port_id, const char *port_name, struct rte_flow_action_rss rss_conf)
 {
     struct rte_flow_attr attr = { 0 };
     struct rte_flow_action action[] = { { 0 }, { 0 } };
-    struct rte_flow *flow;
     struct rte_flow_error flow_error = { 0 };
     struct rte_flow_item pattern[] = { { 0 } };
 
@@ -79,7 +100,7 @@ int DeviceCreateRSSFlowUniform(
 
     pattern[0].type = RTE_FLOW_ITEM_TYPE_END;
 
-    flow = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
+    struct rte_flow *flow = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
     if (flow == NULL) {
         SCLogError("Error when creating rte_flow rule on %s: %s", port_name, flow_error.message);
         int ret = rte_flow_validate(port_id, &attr, pattern, action, &flow_error);
@@ -87,18 +108,30 @@ int DeviceCreateRSSFlowUniform(
                 rte_strerror(-ret), flow_error.message);
         return ret;
     } else {
-        SCLogInfo("RTE_FLOW flow rule created for port %s", port_name);
+        SCLogDebug("RTE_FLOW flow rule created for port %s", port_name);
     }
 
     return 0;
 }
 
+/**
+ * \brief Create RTE_FLOW RSS rule configured with pattern and rss_type
+ *  but with no rx_queues configured. This is specific way of setting RTE_FLOW RSS rule
+ *  for some drivers (mostly for intel NICs). This function's call must be preceded by
+ *  call to function DeviceSetRSSFlowQueues().
+ * 
+ * \param port_id The port identifier of the Ethernet device
+ * \param port_name The port name of the Ethernet device
+ * \param rss_conf RSS configuration
+ * \param rss_type RSS hash type - only this type is used when creating hash with RSS hash function
+ * \param pattern pattern to match incoming traffic
+ * \return int 0 on success, a negative errno value otherwise
+ */
 static int DeviceCreateRSSFlow(int port_id, const char *port_name,
         struct rte_flow_action_rss rss_conf, uint64_t rss_type, struct rte_flow_item *pattern)
 {
     struct rte_flow_attr attr = { 0 };
     struct rte_flow_action action[] = { { 0 }, { 0 } };
-    struct rte_flow *flow;
     struct rte_flow_error flow_error = { 0 };
 
     rss_conf.types = rss_type;
@@ -108,7 +141,7 @@ static int DeviceCreateRSSFlow(int port_id, const char *port_name,
     action[0].conf = &rss_conf;
     action[1].type = RTE_FLOW_ACTION_TYPE_END;
 
-    flow = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
+    struct rte_flow *flow = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
     if (flow == NULL) {
         SCLogError("Error when creating rte_flow rule on %s: %s", port_name, flow_error.message);
         int ret = rte_flow_validate(port_id, &attr, pattern, action, &flow_error);
@@ -116,24 +149,29 @@ static int DeviceCreateRSSFlow(int port_id, const char *port_name,
                 rte_strerror(-ret), flow_error.message);
         return ret;
     } else {
-        SCLogInfo("RTE_FLOW flow rule created for port %s", port_name);
+        SCLogDebug("RTE_FLOW flow rule created for port %s", port_name);
     }
 
     return 0;
 }
 
 /**
- * @brief Some drivers (mostly for intel NICs) require specific way of setting RTE_FLOW RSS rules
+ * \brief Some drivers (mostly for intel NICs) require specific way of setting RTE_FLOW RSS rules
  * with one rule that sets up only queues and other rules that specify patterns to match with
- * queues configured.
+ * queues configured (created with function DeviceCreateRSSFlow() that should follow after this function's
+ * call).
+ * 
+ * \param port_id The port identifier of the Ethernet device
+ * \param port_name The port name of the Ethernet device
+ * \param rss_conf RSS configuration 
+ * \return int 0 on success, a negative errno value otherwise
  */
-
-int DeviceSetRSSFlowQueues(int port_id, const char *port_name, struct rte_flow_action_rss rss_conf)
+int DeviceSetRSSFlowQueues(
+        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf)
 {
     struct rte_flow_attr attr = { 0 };
     struct rte_flow_item pattern[] = { { 0 }, { 0 }, { 0 }, { 0 } };
     struct rte_flow_action action[] = { { 0 }, { 0 } };
-    struct rte_flow *flow;
     struct rte_flow_error flow_error = { 0 };
 
     rss_conf.types = 0; // queues region can not be configured with types
@@ -144,7 +182,7 @@ int DeviceSetRSSFlowQueues(int port_id, const char *port_name, struct rte_flow_a
     action[0].conf = &rss_conf;
     action[1].type = RTE_FLOW_ACTION_TYPE_END;
 
-    flow = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
+    struct rte_flow *flow = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
     if (flow == NULL) {
         SCLogError("Error when creating rte_flow rule on %s: %s", port_name, flow_error.message);
         int ret = rte_flow_validate(port_id, &attr, pattern, action, &flow_error);
@@ -152,35 +190,49 @@ int DeviceSetRSSFlowQueues(int port_id, const char *port_name, struct rte_flow_a
                 rte_strerror(-ret), flow_error.message);
         return ret;
     } else {
-        SCLogInfo("RTE_FLOW queue region created for port %s", port_name);
+        SCLogDebug("RTE_FLOW queue region created for port %s", port_name);
     }
     return 0;
 }
 
-int DeviceSetRSSFlowIPv4(int port_id, const char *port_name, struct rte_flow_action_rss rss_conf)
+/**
+ * \brief Creates RTE_FLOW pattern to match ipv4 traffic
+ * 
+ * \param port_id The port identifier of the Ethernet device
+ * \param port_name The port name of the Ethernet device
+ * \param rss_conf RSS configuration 
+ * \return int 0 on success, a negative errno value otherwise
+ */
+int DeviceSetRSSFlowIPv4(
+        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf)
 {
-    int ret = 0;
     struct rte_flow_item pattern[] = { { 0 }, { 0 }, { 0 } };
 
     pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
     pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
     pattern[2].type = RTE_FLOW_ITEM_TYPE_END;
-    ret |= DeviceCreateRSSFlow(port_id, port_name, rss_conf, RTE_ETH_RSS_IPV4, pattern);
 
-    return ret;
+    return DeviceCreateRSSFlow(port_id, port_name, rss_conf, RTE_ETH_RSS_IPV4, pattern);
 }
 
-int DeviceSetRSSFlowIPv6(int port_id, const char *port_name, struct rte_flow_action_rss rss_conf)
+/**
+ * \brief Creates RTE_FLOW pattern to match ipv6 traffic
+ * 
+ * \param port_id The port identifier of the Ethernet device
+ * \param port_name The port name of the Ethernet device
+ * \param rss_conf RSS configuration 
+ * \return int 0 on success, a negative errno value otherwise
+ */
+int DeviceSetRSSFlowIPv6(
+        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf)
 {
-    int ret = 0;
     struct rte_flow_item pattern[] = { { 0 }, { 0 }, { 0 } };
 
     pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
     pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV6;
     pattern[2].type = RTE_FLOW_ITEM_TYPE_END;
-    ret |= DeviceCreateRSSFlow(port_id, port_name, rss_conf, RTE_ETH_RSS_IPV6, pattern);
 
-    return ret;
+    return DeviceCreateRSSFlow(port_id, port_name, rss_conf, RTE_ETH_RSS_IPV6, pattern);
 }
 
 #endif /* HAVE_DPDK */

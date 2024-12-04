@@ -51,28 +51,11 @@ static void iceDeviceSetRSSHashFunction(uint64_t *rss_hf)
 #endif
 }
 
-static int iceDeviceSetRSSFlowIPv4(
-        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf)
-{
-    int ret = DeviceSetRSSFlowIPv4(port_id, port_name, rss_conf);
-
-    return ret;
-}
-
-static int iceDeviceSetRSSFlowIPv6(
-        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf)
-{
-    int ret = DeviceSetRSSFlowIPv6(port_id, port_name, rss_conf);
-
-    return ret;
-}
-
-int iceDeviceSetRSS(int port_id, int nb_rx_queues, char *port_name)
-{
+int iceDeviceSetRSS(int port_id, int nb_rx_queues, char* port_name)
+{ 
     uint8_t rss_key[ICE_RSS_HKEY_LEN];
     uint16_t queues[RTE_MAX_QUEUES_PER_PORT];
     struct rte_flow_error flush_error = { 0 };
-    struct rte_flow_action_rss rss_action_conf = { 0 };
     struct rte_eth_rss_conf rss_conf = {
         .rss_key = rss_key,
         .rss_key_len = ICE_RSS_HKEY_LEN,
@@ -89,11 +72,10 @@ int iceDeviceSetRSS(int port_id, int nb_rx_queues, char *port_name)
                    "configured with a positive number");
     }
 
-    rss_action_conf =
-            DeviceInitRSSAction(rss_conf, 0, queues, RTE_ETH_HASH_FUNCTION_TOEPLITZ, false);
+    struct rte_flow_action_rss rss_action_conf = DeviceInitRSSAction(rss_conf, 0, queues, RTE_ETH_HASH_FUNCTION_TOEPLITZ, false);
 
-    retval = iceDeviceSetRSSFlowIPv4(port_id, port_name, rss_action_conf);
-    retval |= iceDeviceSetRSSFlowIPv6(port_id, port_name, rss_action_conf);
+    retval = DeviceSetRSSFlowIPv4(port_id, port_name, rss_action_conf);
+    retval |= DeviceSetRSSFlowIPv6(port_id, port_name, rss_action_conf);
     if (retval != 0) {
         retval = rte_flow_flush(port_id, &flush_error);
         if (retval != 0) {

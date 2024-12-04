@@ -45,7 +45,6 @@ int mlx5DeviceSetRSS(int port_id, int nb_rx_queues, char *port_name)
     uint8_t rss_key[MLX5_RSS_HKEY_LEN];
     uint16_t queues[RTE_MAX_QUEUES_PER_PORT];
     struct rte_flow_error flush_error = { 0 };
-    struct rte_flow_action_rss rss_action_conf = { 0 };
     struct rte_eth_rss_conf rss_conf = {
         .rss_key = rss_key,
         .rss_key_len = MLX5_RSS_HKEY_LEN,
@@ -62,10 +61,9 @@ int mlx5DeviceSetRSS(int port_id, int nb_rx_queues, char *port_name)
                    "configured with a positive number");
     }
 
-    rss_action_conf = DeviceInitRSSAction(
-            rss_conf, nb_rx_queues, queues, RTE_ETH_HASH_FUNCTION_TOEPLITZ, true);
+    struct rte_flow_action_rss rss_action_conf = DeviceInitRSSAction(rss_conf, nb_rx_queues, queues, RTE_ETH_HASH_FUNCTION_TOEPLITZ, true);
 
-    retval = DeviceCreateRSSFlowUniform(port_id, port_name, rss_action_conf);
+    retval = DeviceCreateRSSFlowGeneric(port_id, port_name, rss_action_conf);
     if (retval != 0) {
         retval = rte_flow_flush(port_id, &flush_error);
         if (retval != 0) {

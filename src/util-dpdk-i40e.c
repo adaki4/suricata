@@ -1,4 +1,4 @@
-/* Copyright (C) 2021-2024s Open Information Security Foundation
+/* Copyright (C) 2021-2024 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -188,7 +188,6 @@ static int i40eDeviceSetRSSWithFlows(int port_id, const char *port_name, int nb_
     uint8_t rss_key[I40E_RSS_HKEY_LEN];
     uint16_t queues[RTE_MAX_QUEUES_PER_PORT];
     struct rte_flow_error flush_error = { 0 };
-    struct rte_flow_action_rss rss_action_conf = { 0 };
     struct rte_eth_rss_conf rss_conf = {
         .rss_key = rss_key,
         .rss_key_len = I40E_RSS_HKEY_LEN,
@@ -205,8 +204,7 @@ static int i40eDeviceSetRSSWithFlows(int port_id, const char *port_name, int nb_
                    "configured with a positive number");
     }
 
-    rss_action_conf = DeviceInitRSSAction(
-            rss_conf, nb_rx_queues, queues, RTE_ETH_HASH_FUNCTION_DEFAULT, false);
+    struct rte_flow_action_rss rss_action_conf = DeviceInitRSSAction(rss_conf, nb_rx_queues, queues, RTE_ETH_HASH_FUNCTION_DEFAULT, false);
 
     retval = DeviceSetRSSFlowQueues(port_id, port_name, rss_action_conf);
 
