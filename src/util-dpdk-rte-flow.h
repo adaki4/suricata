@@ -30,8 +30,6 @@
  *
  */
 #include "conf.h"
-#include "decode.h"
-#include "source-dpdk.h"
 
 #ifndef SURICATA_RTE_FLOW_RULES_H
 #define SURICATA_RTE_FLOW_RULES_H
@@ -39,6 +37,6 @@
 void RuleStorageFree(RuleStorage *rule_storage);
 int ConfigLoadRTEFlowRules(ConfNode *if_root, ConfNode *if_default, const char *filter_type,
         RuleStorage *rule_storage);
-int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, char *driver_name);
+int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, const char *driver_name);
 
 #endif /* SURICATA_RTE_FLOW_RULES_H */

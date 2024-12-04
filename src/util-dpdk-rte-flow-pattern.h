@@ -30,7 +30,9 @@
  *
  */
 
-#include "rte_flow.h"
+#ifdef HAVE_DPDK
+#include <rte_ethdev.h>
+#endif
 
 #ifndef SURICATA_RTE_FLOW_RULES_PATTERN_H
 #define SURICATA_RTE_FLOW_RULES_PATTERN_H
