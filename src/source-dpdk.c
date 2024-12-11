@@ -641,6 +641,7 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
             SCLogError("%s: error when creating rte_flow rules", dpdk_config->iface);
             goto fail;
         }
+
         // some PMDs requires additional actions only after the device has started
         DevicePostStartPMDSpecificActions(ptv, dev_info.driver_name);
 

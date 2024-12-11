@@ -316,6 +316,7 @@ static void DPDKDerefConfig(void *conf)
 {
     SCEnter();
     DPDKIfaceConfig *iconf = (DPDKIfaceConfig *)conf;
+
     iconf->RTERulesFree(&iconf->drop_filter);
 
     if (SC_ATOMIC_SUB(iconf->ref, 1) == 1) {

@@ -1,0 +1,4 @@
+util-dpdk-rte-flow.c:234:21: error: expected expression
+  234 |         } else if ( = rte_flow_create(port_id, &attr, items, action, &flow_error) == NULL) {
+      |                     ^
+1 error generated.
