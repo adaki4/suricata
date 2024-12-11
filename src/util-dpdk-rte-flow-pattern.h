@@ -30,15 +30,20 @@
  *
  */
 
-#ifdef HAVE_DPDK
-#include <rte_ethdev.h>
-#endif
+#include "util-dpdk.h"
 
 #ifndef SURICATA_RTE_FLOW_RULES_PATTERN_H
 #define SURICATA_RTE_FLOW_RULES_PATTERN_H
 
+#ifdef HAVE_DPDK
+#if RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)
+
+#include <rte_ethdev.h>
+
 int ParsePattern(char *pattern, uint8_t *data, unsigned int size, struct rte_flow_item **items);
 
+#endif /* RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0) */
+#endif /* HAVE_DPDK */
 #endif /* SURICATA_RTE_FLOW_RULES_PATTERN_H */
 /**
  * @}

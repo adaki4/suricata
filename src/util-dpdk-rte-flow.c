@@ -33,10 +33,12 @@
 #include "decode.h"
 #include "runmode-dpdk.h"
 #include "util-debug.h"
+#include "util-dpdk.h"
 #include "util-dpdk-rte-flow.h"
 #include "util-dpdk-rte-flow-pattern.h"
 
 #ifdef HAVE_DPDK
+#if RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)
 
 #define INITIAL_RULE_COUNT_CAPACITY 5
 #define DATA_BUFFER_SIZE            1024
@@ -100,6 +102,11 @@ static int RuleStorageExtendCapacity(RuleStorage *rule_storage)
     SCReturnInt(0);
 }
 
+/**
+ * \brief Deallocation of memory containing user set rte_flow rules
+ *
+ * \param rule_storage rules loaded from suricata.yaml
+ */
 void RuleStorageFree(RuleStorage *rule_storage)
 {
     if (rule_storage->rules == NULL) {
@@ -112,6 +119,15 @@ void RuleStorageFree(RuleStorage *rule_storage)
     rule_storage->rules = NULL;
 }
 
+/**
+ * \brief Load rte_flow rules patterns from suricata.yaml
+ *
+ * \param if_root root node in suricata.yaml
+ * \param if_default default value
+ * \param filter_type type of rte_flow rules to be loaded, only drop_filter is supported
+ * \param rule_storage pointer to structure to load rte_flow rules into
+ * \return int 0 on success, -1 on failure
+ */
 int ConfigLoadRTEFlowRules(
         ConfNode *if_root, ConfNode *if_default, const char *filter_type, RuleStorage *rule_storage)
 {
@@ -142,7 +158,10 @@ int ConfigLoadRTEFlowRules(
 
 /**
  * \brief Check and log whether pattern is broad / not-specific
- *        as ice does not accept them                  */
+ *        as ice does not accept them
+ *
+ * \param items array of pattern items
+ */
 static void iceDeviceError(struct rte_flow_item *items)
 {
     int i = 0;
@@ -157,7 +176,11 @@ static void iceDeviceError(struct rte_flow_item *items)
 
 /**
  * \brief Specify ambigous error messages as some drivers have specific
- * behaviour when creating rte_flow rules */
+ * behaviour when creating rte_flow rules
+ *
+ * \param driver_name name of a driver
+ * \param items array of pattern items
+ */
 static void DriverSpecificErrorMessage(const char *driver_name, struct rte_flow_item *items)
 {
     if (strcmp(driver_name, "net_ice") == 0) {
@@ -165,6 +188,15 @@ static void DriverSpecificErrorMessage(const char *driver_name, struct rte_flow_
     }
 }
 
+/**
+ * \brief Create rte_flow drop rules with patterns stored in rule_storage on a port with id port_id
+ *
+ * \param port_name name of a port
+ * \param port_id identificator of a port
+ * \param rule_storage pointer to structure containing rte_flow rule patterns
+ * \param driver_name name of a driver
+ * \return int 0 on success, -1 on error
+ */
 int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, const char *driver_name)
 {
     SCEnter();
@@ -187,14 +219,12 @@ int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, const c
         if ((ret = ParsePattern(rule_storage->rules[i], data, sizeof(data), &items)) != 0) {
             failed_count++;
             SCLogError("Error when parsing rte_flow rule: %s", rule_storage->rules[i]);
-            continue;
         } else if ((ret = rte_flow_validate(port_id, &attr, items, action, &flow_error)) != 0) {
             failed_count++;
             SCLogError("Error when validating rte_flow rule with pattern %s for port %s: %s "
                        "errmsg: %s",
                     rule_storage->rules[i], port_name, rte_strerror(-ret), flow_error.message);
             DriverSpecificErrorMessage(driver_name, items);
-            continue;
         } else if ((flow = rte_flow_create(port_id, &attr, items, action, &flow_error)) == NULL) {
             failed_count++;
             SCLogError("Error when creating rte_flow rule with pattern %s on %s: %s",
@@ -214,12 +244,13 @@ int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, const c
             SCLogError("Unable to flush rte_flow rules of %s: %s Flush error msg: %s", port_name,
                     rte_strerror(-ret), flush_error.message);
         }
-        SCReturn(-1);
+        SCReturnInt(-1);
     }
 
     SCReturnInt(0);
 }
 
+#endif /* RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)*/
 #endif /* HAVE_DPDK */
 /**
  * @}

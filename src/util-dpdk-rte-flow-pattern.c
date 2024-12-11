@@ -52,10 +52,13 @@
  */
 
 #include "util-debug.h"
+#include "util-dpdk.h"
+#include "util-dpdk-rte-flow-pattern.h"
 
 #ifdef HAVE_DPDK
+#if RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)
+
 #include <cmdline_parse_etheraddr.h>
-#include "util-dpdk-rte-flow-pattern.h"
 
 enum index {
     /* Special tokens. */
@@ -392,6 +395,7 @@ struct arg {
     uint32_t size;        /**< Field size. */
     const uint8_t *mask;  /**< Bit-mask to use instead of offset/size. */
 };
+
 struct buffer {
     enum index command; /**< Flow command. */
     union {
@@ -1366,13 +1370,23 @@ static int flow_parse(
     return (ret >= 0 && !strlen(src)) ? 0 : -1;
 }
 
+/**
+ * \brief Parse rte_flow rule pattern and store individual pattern items in items and their
+ * attributes in buffer data
+ *
+ * \param pattern rte_flow rule pattern to be parsed
+ * \param data buffer to store parsed pattern
+ * \param size size of buffer
+ * \param items parsed items used when creating rte_flow rules
+ * \return int 0 on success, -1 on error
+ */
 int ParsePattern(char *pattern, uint8_t *data, unsigned int size, struct rte_flow_item **items)
 {
     SCEnter();
-    int ret = flow_parse(pattern, (void *)data, size, items);
-    SCReturnInt(ret);
+    SCReturnInt(flow_parse(pattern, (void *)data, size, items));
 }
 
+#endif /* RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)*/
 #endif /* HAVE_DPDK */
 /**
  * @}

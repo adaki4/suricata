@@ -635,12 +635,15 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
             goto fail;
         }
 
+#if RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)
         retval = CreateRules(dpdk_config->iface, dpdk_config->port_id, &dpdk_config->drop_filter,
                 dev_info.driver_name);
         if (retval != 0) {
             SCLogError("%s: error when creating rte_flow rules", dpdk_config->iface);
             goto fail;
         }
+#endif /* RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)*/
+
         // some PMDs requires additional actions only after the device has started
         DevicePostStartPMDSpecificActions(ptv, dev_info.driver_name);
 
@@ -658,6 +661,7 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
         }
     }
 
+#if RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)
     // Save rte_flow rules from being destroyed
     char **tmp = dpdk_config->drop_filter.rules;
     dpdk_config->drop_filter.rules = NULL;
@@ -668,6 +672,7 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
     // Restore rte_flow rules
     dpdk_config->drop_filter.rules = tmp;
     tmp = NULL;
+#endif /* SURICATA_RTE_FLOW_RULES_PATTERN_H */
 
     SCReturnInt(TM_ECODE_OK);
 

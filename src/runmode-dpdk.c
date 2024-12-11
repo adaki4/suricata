@@ -316,7 +316,10 @@ static void DPDKDerefConfig(void *conf)
 {
     SCEnter();
     DPDKIfaceConfig *iconf = (DPDKIfaceConfig *)conf;
+
+#if RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)
     iconf->RTERulesFree(&iconf->drop_filter);
+#endif /* RTE_VERSION_NUM(21, 0, 0, 0) */
 
     if (SC_ATOMIC_SUB(iconf->ref, 1) == 1) {
         if (iconf->pkt_mempool != NULL) {
@@ -341,7 +344,10 @@ static void ConfigInit(DPDKIfaceConfig **iconf)
     SC_ATOMIC_INIT(ptr->ref);
     (void)SC_ATOMIC_ADD(ptr->ref, 1);
     ptr->DerefFunc = DPDKDerefConfig;
+
+#if RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)
     ptr->RTERulesFree = RuleStorageFree;
+#endif /* RTE_VERSION_NUM(21, 0, 0, 0) */
     ptr->flags = 0;
 
     *iconf = ptr;
@@ -846,10 +852,12 @@ static int ConfigLoad(DPDKIfaceConfig *iconf, const char *iface)
     if (retval < 0)
         SCReturnInt(retval);
 
+#if RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)
     retval =
             ConfigLoadRTEFlowRules(if_root, if_default, dpdk_yaml.drop_filter, &iconf->drop_filter);
     if (retval < 0)
         SCReturnInt(retval);
+#endif /* SURICATA_RTE_FLOW_RULES_PATTERN_H */
 
     SCReturnInt(0);
 }
