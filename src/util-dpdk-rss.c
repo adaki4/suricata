@@ -91,7 +91,7 @@ struct rte_flow_action_rss DeviceInitRSSAction(struct rte_eth_rss_conf rss_conf,
  * \return int 0 on success, a negative errno value otherwise
  */
 int DeviceCreateRSSFlowGeneric(
-        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf)
+        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf, bool decap_enabled)
 {
     struct rte_flow_attr attr = { 0 };
     struct rte_flow_action action[] = { { 0 }, { 0 } };
@@ -99,6 +99,11 @@ int DeviceCreateRSSFlowGeneric(
     struct rte_flow_item pattern[] = { { 0 } };
 
     rss_conf.types = RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_IPV6;
+
+    // group is implicitly 0
+    if (decap_enabled) {
+        attr.group = 1;
+    }
 
     attr.ingress = 1;
     action[0].type = RTE_FLOW_ACTION_TYPE_RSS;

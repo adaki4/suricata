@@ -191,7 +191,7 @@ static inline void DPDKFreeMbufArray(
     }
 }
 
-static void DevicePostStartPMDSpecificActions(DPDKThreadVars *ptv, const char *driver_name)
+static void DevicePostStartPMDSpecificActions(DPDKThreadVars *ptv, const char *driver_name, DPDKIfaceConfig *dpdk_config)
 {
     if (strcmp(driver_name, "net_bonding") == 0)
         driver_name = BondingDeviceDriverGet(ptv->port_id);
@@ -201,8 +201,13 @@ static void DevicePostStartPMDSpecificActions(DPDKThreadVars *ptv, const char *d
         ixgbeDeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
     if (strcmp(driver_name, "net_ice") == 0)
         iceDeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
-    if (strcmp(driver_name, "mlx5_pci") == 0)
-        mlx5DeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
+    if (strcmp(driver_name, "mlx5_pci") == 0) {
+        int decap_rule_failed = 0;
+        if (dpdk_config->vxlan_offload_enabled)
+            decap_rule_failed = mlx5DeviceSetRTEFlowOffloads(ptv->port_id, ptv->livedev->dev);
+        // if rte_flow decap rule fails, setup RSS as usual
+        mlx5DeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev, !decap_rule_failed && dpdk_config->vxlan_offload_enabled);
+    }
 }
 
 static void DevicePreClosePMDSpecificActions(DPDKThreadVars *ptv, const char *driver_name)
@@ -641,7 +646,7 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
         }
 
         // some PMDs requires additional actions only after the device has started
-        DevicePostStartPMDSpecificActions(ptv, dev_info.driver_name);
+        DevicePostStartPMDSpecificActions(ptv, dev_info.driver_name, dpdk_config);
 
         uint16_t inconsistent_numa_cnt = SC_ATOMIC_GET(dpdk_config->inconsistent_numa_cnt);
         if (inconsistent_numa_cnt > 0 && ptv->port_socket_id != SOCKET_ID_ANY) {

@@ -38,7 +38,7 @@ struct rte_flow_action_rss DeviceInitRSSAction(struct rte_eth_rss_conf rss_conf,
         uint16_t *queues, enum rte_eth_hash_function func, bool set_key);
 int DeviceSetRSSFlowQueues(int port_id, const char *port_name, struct rte_flow_action_rss rss_conf);
 int DeviceCreateRSSFlowGeneric(
-        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf);
+        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf, bool decap_enabled);
 int DeviceSetRSSFlowIPv4(int port_id, const char *port_name, struct rte_flow_action_rss rss_conf);
 int DeviceSetRSSFlowIPv6(int port_id, const char *port_name, struct rte_flow_action_rss rss_conf);
 

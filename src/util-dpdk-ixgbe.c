@@ -62,7 +62,7 @@ int ixgbeDeviceSetRSS(int port_id, int nb_rx_queues, char *port_name)
     struct rte_flow_action_rss rss_action_conf = DeviceInitRSSAction(
             rss_conf, nb_rx_queues, queues, RTE_ETH_HASH_FUNCTION_DEFAULT, true);
 
-    int retval = DeviceCreateRSSFlowGeneric(port_id, port_name, rss_action_conf);
+    int retval = DeviceCreateRSSFlowGeneric(port_id, port_name, rss_action_conf, false);
     if (retval != 0) {
         retval = rte_flow_flush(port_id, &flush_error);
         if (retval != 0) {

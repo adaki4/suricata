@@ -118,6 +118,7 @@ static void DPDKDerefConfig(void *conf);
 #define DPDK_CONFIG_DEFAULT_CHECKSUM_VALIDATION         1
 #define DPDK_CONFIG_DEFAULT_CHECKSUM_VALIDATION_OFFLOAD 1
 #define DPDK_CONFIG_DEFAULT_VLAN_STRIP                  0
+#define DPDK_CONFIG_DEFAULT_VXLAN_OFFLOAD               0
 #define DPDK_CONFIG_DEFAULT_COPY_MODE                   "none"
 #define DPDK_CONFIG_DEFAULT_COPY_INTERFACE              "none"
 
@@ -130,6 +131,7 @@ DPDKIfaceConfigAttributes dpdk_yaml = {
     .checksum_checks_offload = "checksum-checks-offload",
     .mtu = "mtu",
     .vlan_strip_offload = "vlan-strip-offload",
+    .vxlan_offload = "vxlan-offload",
     .rss_hf = "rss-hash-functions",
     .mempool_size = "mempool-size",
     .mempool_cache_size = "mempool-cache-size",
@@ -617,6 +619,13 @@ static void ConfigSetVlanStrip(DPDKIfaceConfig *iconf, int entry_bool)
     SCReturn;
 }
 
+static void ConfigSetVxlanOffload(DPDKIfaceConfig *iconf, int entry_bool)
+{
+    SCEnter();
+    iconf->vxlan_offload_enabled = entry_bool;
+    SCReturn;
+}
+
 static int ConfigSetCopyIface(DPDKIfaceConfig *iconf, const char *entry_str)
 {
     SCEnter();
@@ -814,6 +823,14 @@ static int ConfigLoad(DPDKIfaceConfig *iconf, const char *iface)
         ConfigSetVlanStrip(iconf, DPDK_CONFIG_DEFAULT_VLAN_STRIP);
     } else {
         ConfigSetVlanStrip(iconf, entry_bool);
+    }
+
+    retval = ConfGetChildValueBoolWithDefault(
+            if_root, if_default, dpdk_yaml.vxlan_offload, &entry_bool);
+    if (retval != 1) {
+        ConfigSetVxlanOffload(iconf, DPDK_CONFIG_DEFAULT_VXLAN_OFFLOAD);
+    } else {
+        ConfigSetVxlanOffload(iconf, entry_bool);
     }
 
     retval = ConfGetChildValueWithDefault(if_root, if_default, dpdk_yaml.copy_mode, &copy_mode_str);
