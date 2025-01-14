@@ -475,12 +475,15 @@ struct token {
  */
 #define RTE_IPV6_ADDR_SIZE 16
 
+#if RTE_VERSION < RTE_VERSION_NUM(24, 0, 0, 0)
 /**
  * IPv6 Address
  */
 struct rte_ipv6_addr {
     uint8_t a[RTE_IPV6_ADDR_SIZE];
 };
+#endif /* RTE_VERSION < RTE_VERSION_NUM(24, 0, 0, 0) */
+
 struct parse_item_priv {
     enum rte_flow_item_type type; /**< Item type. */
     uint32_t size;                /**< Size of item specification structure. */
@@ -1373,7 +1376,7 @@ static int flow_parse(
 
 /**
  * \brief Parse rte_flow rule pattern and store individual pattern items in items and their
- * attributes in buffer data
+ *        attributes in buffer data
  *
  * \param pattern rte_flow rule pattern to be parsed
  * \param data buffer to store parsed pattern
@@ -1381,11 +1384,12 @@ static int flow_parse(
  * \param items parsed items used when creating rte_flow rules
  * \return int 0 on success, -1 on error
  */
-int ParsePattern(char *pattern, uint8_t *data, unsigned int size, struct rte_flow_item **items)
+int ParsePattern(
+        char *pattern, uint8_t *items_data_buffer, unsigned int size, struct rte_flow_item **items)
 {
     SCEnter();
 #if RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)
-    SCReturnInt(flow_parse(pattern, (void *)data, size, items));
+    SCReturnInt(flow_parse(pattern, (void *)items_data_buffer, size, items));
 #else
     SCReturnInt(0);
 #endif /* RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)*/

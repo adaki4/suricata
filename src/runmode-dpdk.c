@@ -309,13 +309,13 @@ static void DPDKDerefConfig(void *conf)
     SCEnter();
     DPDKIfaceConfig *iconf = (DPDKIfaceConfig *)conf;
 
-    iconf->RTERulesFree(&iconf->drop_filter);
-
     if (SC_ATOMIC_SUB(iconf->ref, 1) == 1) {
         if (iconf->pkt_mempool != NULL) {
             rte_mempool_free(iconf->pkt_mempool);
         }
-
+        if (&iconf->drop_filter != NULL) {
+            iconf->RteRulesFree(&iconf->drop_filter);
+        }
         SCFree(iconf);
     }
     SCReturn;
@@ -334,7 +334,7 @@ static void ConfigInit(DPDKIfaceConfig **iconf)
     SC_ATOMIC_INIT(ptr->ref);
     (void)SC_ATOMIC_ADD(ptr->ref, 1);
     ptr->DerefFunc = DPDKDerefConfig;
-    ptr->RTERulesFree = RuleStorageFree;
+    ptr->RteRulesFree = RteFlowRuleStorageFree;
     ptr->flags = 0;
 
     *iconf = ptr;
@@ -840,7 +840,7 @@ static int ConfigLoad(DPDKIfaceConfig *iconf, const char *iface)
         SCReturnInt(retval);
 
     retval =
-            ConfigLoadRTEFlowRules(if_root, if_default, dpdk_yaml.drop_filter, &iconf->drop_filter);
+            ConfigLoadRteFlowRules(if_root, if_default, dpdk_yaml.drop_filter, &iconf->drop_filter);
     if (retval < 0)
         SCReturnInt(retval);
 

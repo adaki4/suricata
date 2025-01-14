@@ -1,4 +1,4 @@
-/* Copyright (C) 2024 Open Information Security Foundation
+/* Copyright (C) 2025 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -30,18 +30,21 @@
  *
  */
 
-#include "conf.h"
-#include "util-dpdk.h"
-
 #ifndef SURICATA_RTE_FLOW_RULES_H
 #define SURICATA_RTE_FLOW_RULES_H
 
 #ifdef HAVE_DPDK
 
-void RuleStorageFree(RuleStorage *rule_storage);
-int ConfigLoadRTEFlowRules(ConfNode *if_root, ConfNode *if_default, const char *filter_type,
-        RuleStorage *rule_storage);
-int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, const char *driver_name);
+#include "conf.h"
+#include "util-dpdk.h"
+
+void RteFlowRuleStorageFree(RteFlowRuleStorage *rte_flow_rule_storage);
+int ConfigLoadRteFlowRules(ConfNode *if_root, ConfNode *if_default, const char *filter_type,
+        RteFlowRuleStorage *rte_flow_rule_storage);
+int CreateRteFlowRules(char *port_name, int port_id, RteFlowRuleStorage *rte_flow_rule_storage,
+        const char *driver_name);
+uint64_t QueryRteFlowFilteredPackets(struct rte_flow **rte_flow_rules, uint16_t rule_count,
+        char *device_name, int port_id, uint64_t *filtered_packets);
 
 #endif /* HAVE_DPDK */
 #endif /* SURICATA_RTE_FLOW_RULES_H */

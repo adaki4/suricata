@@ -1,4 +1,4 @@
-/* Copyright (C) 2024 Open Information Security Foundation
+/* Copyright (C) 2025Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -30,13 +30,12 @@
  *
  */
 
-#include "util-dpdk.h"
-
 #ifndef SURICATA_RTE_FLOW_RULES_PATTERN_H
 #define SURICATA_RTE_FLOW_RULES_PATTERN_H
 
 #ifdef HAVE_DPDK
 
+#include "util-dpdk.h"
 #include <rte_ethdev.h>
 
 int ParsePattern(char *pattern, uint8_t *data, unsigned int size, struct rte_flow_item **items);

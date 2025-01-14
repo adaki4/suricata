@@ -49,11 +49,12 @@ typedef struct DPDKWorkerSync_ {
     SC_ATOMIC_DECLARE(uint16_t, worker_checked_in);
 } DPDKWorkerSync;
 
-typedef struct RuleStorage_ {
-    uint16_t curr_rule_count;
-    uint16_t max_rule_count;
-    char **rules;
-} RuleStorage;
+typedef struct RteFlowRuleStorage_ {
+    uint16_t curr_rte_flow_rule_count;
+    uint16_t max_rte_flow_rule_count;
+    char **rte_flow_rules;
+    struct rte_flow **rte_flow_rule_handlers;
+} RteFlowRuleStorage;
 
 typedef struct DPDKIfaceConfig_ {
 #ifdef HAVE_DPDK
@@ -79,7 +80,7 @@ typedef struct DPDKIfaceConfig_ {
     uint16_t nb_tx_desc;
     uint32_t mempool_size;
     uint32_t mempool_cache_size;
-    RuleStorage drop_filter;
+    RteFlowRuleStorage drop_filter;
     struct rte_mempool *pkt_mempool;
     SC_ATOMIC_DECLARE(unsigned int, ref);
     /* threads bind queue id one by one */
@@ -87,7 +88,7 @@ typedef struct DPDKIfaceConfig_ {
     SC_ATOMIC_DECLARE(uint16_t, inconsistent_numa_cnt);
     DPDKWorkerSync *workers_sync;
     void (*DerefFunc)(void *);
-    void (*RTERulesFree)(RuleStorage *);
+    void (*RteRulesFree)(RteFlowRuleStorage *);
 
     struct rte_flow *flow[100];
 #endif
