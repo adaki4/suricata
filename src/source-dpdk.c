@@ -721,7 +721,7 @@ static void PrintDPDKPortXstats(uint32_t port_id, const char *port_name)
                 rte_strerror(-ret), port_name);
     }
     for (int32_t i = 0; i < len; i++) {
-        if (xstats[i].value > 0)
+        // if (xstats[i].value > 0)
             SCLogPerf("Port %u (%s) - %s: %" PRIu64, port_id, port_name, xstats_names[i].name,
                     xstats[i].value);
     }
