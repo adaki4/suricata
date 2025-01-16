@@ -309,13 +309,13 @@ static void DPDKDerefConfig(void *conf)
     SCEnter();
     DPDKIfaceConfig *iconf = (DPDKIfaceConfig *)conf;
 
-    iconf->RTERulesFree(&iconf->drop_filter);
-
     if (SC_ATOMIC_SUB(iconf->ref, 1) == 1) {
         if (iconf->pkt_mempool != NULL) {
             rte_mempool_free(iconf->pkt_mempool);
         }
-
+        if (&iconf->drop_filter != NULL) {
+            iconf->RTERulesFree(&iconf->drop_filter);
+        }
         SCFree(iconf);
     }
     SCReturn;
