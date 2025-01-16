@@ -475,12 +475,15 @@ struct token {
  */
 #define RTE_IPV6_ADDR_SIZE 16
 
+#if RTE_VERSION < RTE_VERSION_NUM(24, 0, 0, 0)
 /**
  * IPv6 Address
  */
 struct rte_ipv6_addr {
     uint8_t a[RTE_IPV6_ADDR_SIZE];
 };
+#endif /* RTE_VERSION < RTE_VERSION_NUM(24, 0, 0, 0) */
+
 struct parse_item_priv {
     enum rte_flow_item_type type; /**< Item type. */
     uint32_t size;                /**< Size of item specification structure. */

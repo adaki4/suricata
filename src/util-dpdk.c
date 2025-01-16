@@ -61,6 +61,9 @@ void DPDKFreeDevice(LiveDevice *ldev)
     if (SCRunmodeGet() == RUNMODE_DPDK) {
         SCLogDebug("%s: releasing packet mempool", ldev->dev);
         rte_mempool_free(ldev->dpdk_vars.pkt_mp);
+        if (ldev->dpdk_vars.flow_rule_handlers != NULL && ldev->dpdk_vars.flow_rule_count != 0) {
+            SCFree(ldev->dpdk_vars.flow_rule_handlers);
+        }
     }
 #endif
 }

@@ -20,6 +20,7 @@
 
 #ifdef HAVE_DPDK
 #include <rte_mempool.h>
+#include <rte_flow.h>
 #endif /* HAVE_DPDK */
 
 #include "queue.h"
@@ -43,6 +44,8 @@ int LiveGetOffload(void);
 #ifdef HAVE_DPDK
 typedef struct {
     struct rte_mempool *pkt_mp;
+    struct rte_flow **flow_rule_handlers;
+    uint16_t flow_rule_count;
 } DPDKDeviceResources;
 #endif /* HAVE_DPDK */
 

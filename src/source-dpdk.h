@@ -53,6 +53,7 @@ typedef struct RuleStorage_ {
     uint16_t curr_rule_count;
     uint16_t max_rule_count;
     char **rules;
+    struct rte_flow **rule_handlers;
 } RuleStorage;
 
 typedef struct DPDKIfaceConfig_ {

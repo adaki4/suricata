@@ -30,18 +30,20 @@
  *
  */
 
-#include "conf.h"
-#include "util-dpdk.h"
-
 #ifndef SURICATA_RTE_FLOW_RULES_H
 #define SURICATA_RTE_FLOW_RULES_H
 
 #ifdef HAVE_DPDK
 
+#include "conf.h"
+#include "util-dpdk.h"
+
 void RuleStorageFree(RuleStorage *rule_storage);
 int ConfigLoadRTEFlowRules(ConfNode *if_root, ConfNode *if_default, const char *filter_type,
         RuleStorage *rule_storage);
 int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, const char *driver_name);
+int QueryRTEFlowFilteredPackets(struct rte_flow **rte_flow_rules, uint16_t rule_count, int port_id,
+        uint64_t *filtered_packets, struct rte_flow_error *flow_error);
 
 #endif /* HAVE_DPDK */
 #endif /* SURICATA_RTE_FLOW_RULES_H */

@@ -46,6 +46,8 @@
 static int RuleStorageSetup(RuleStorage *);
 static int RuleStorageAddRule(RuleStorage *, const char *);
 static int RuleStorageExtendCapacity(RuleStorage *);
+static void iceDeviceError(struct rte_flow_item *);
+static void DriverSpecificErrorMessage(const char *, struct rte_flow_item *);
 
 static int RuleStorageSetup(RuleStorage *rule_storage)
 {
@@ -151,6 +153,7 @@ void RuleStorageFree(RuleStorage *rule_storage)
     }
     SCFree(rule_storage->rules);
     rule_storage->rules = NULL;
+
 #endif /* RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0) */
 }
 
@@ -193,6 +196,30 @@ int ConfigLoadRTEFlowRules(
     SCReturnInt(0);
 }
 
+int QueryRTEFlowFilteredPackets(struct rte_flow **rte_flow_rules, uint16_t rule_count, int port_id,
+        uint64_t *filtered_packets, struct rte_flow_error *flow_error)
+{
+    struct rte_flow_query_count query_count = { 0 };
+    struct rte_flow_action action[] = { { 0 }, { 0 }, { 0 } };
+    uint32_t counter_id = 128;
+
+    query_count.reset = 0;
+    action[0].type = RTE_FLOW_ACTION_TYPE_COUNT;
+    action[0].conf = &counter_id;
+    action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+    for (uint16_t i = 0; i < rule_count; i++) {
+        int query_ret = rte_flow_query(
+                port_id, rte_flow_rules[i], &(action[0]), (void *)&query_count, flow_error);
+        if (query_ret != 0) {
+            return query_ret;
+        }
+        *filtered_packets += query_count.hits;
+    }
+
+    return 0;
+}
+
 /**
  * \brief Create rte_flow drop rules with patterns stored in rule_storage on a port with id port_id
  *
@@ -209,20 +236,35 @@ int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, const c
     int failed_count = 0;
     struct rte_flow_error flush_error = { 0 };
     struct rte_flow_attr attr = { 0 };
-    struct rte_flow_action action[] = { { 0 }, { 0 } };
-    struct rte_flow *flow;
+    struct rte_flow_action action[] = { { 0 }, { 0 }, { 0 } };
+
+    uint32_t counter_id = 128;
 
     attr.ingress = 1;
-    action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
-    action[1].type = RTE_FLOW_ACTION_TYPE_END;
+    if (strcmp(driver_name, "net_ice") == 0 || strcmp(driver_name, "mlx5_pci") == 0) {
+        action[0].type = RTE_FLOW_ACTION_TYPE_COUNT;
+        action[0].conf = &counter_id;
+        action[1].type = RTE_FLOW_ACTION_TYPE_DROP;
+        action[2].type = RTE_FLOW_ACTION_TYPE_END;
+    } else {
+        action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+        action[1].type = RTE_FLOW_ACTION_TYPE_END;
+    }
+
+    rule_storage->rule_handlers =
+            SCMalloc(sizeof(struct rte_flow_rule *) * rule_storage->curr_rule_count);
+    if (rule_storage->rule_handlers == NULL) {
+        SCLogError("Memory allocation for rte_flow rule string failed");
+        RuleStorageFree(rule_storage);
+        SCReturnInt(-1);
+    }
 
     for (int i = 0; i < rule_storage->curr_rule_count; i++) {
         struct rte_flow_item *items = { 0 };
         struct rte_flow_error flow_error = { 0 };
         uint8_t data[DATA_BUFFER_SIZE] = { 0 };
 
-        int ret;
-        ret = ParsePattern(rule_storage->rules[i], data, sizeof(data), &items);
+        int ret = ParsePattern(rule_storage->rules[i], data, sizeof(data), &items);
         if (ret != 0) {
             failed_count++;
             SCLogError("Error when parsing rte_flow rule: %s", rule_storage->rules[i]);
@@ -239,17 +281,16 @@ int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, const c
             continue;
         }
 
-        flow = rte_flow_create(port_id, &attr, items, action, &flow_error);
+        struct rte_flow *flow = rte_flow_create(port_id, &attr, items, action, &flow_error);
         if (flow == NULL) {
             failed_count++;
             SCLogError("Error when creating rte_flow rule with pattern %s on %s: %s",
                     rule_storage->rules[i], port_name, flow_error.message);
             continue;
         }
-
+        rule_storage->rule_handlers[i] = flow;
         SCLogInfo("rte_flow rule with pattern: %s  for port %s", rule_storage->rules[i], port_name);
     }
-    RuleStorageFree(rule_storage);
 
     if (failed_count) {
         SCLogError("Error parsing/creating %i rte_flow rule(s), flushing rules on port %s",
