@@ -48,6 +48,9 @@ static int RuleStorageAddRule(RuleStorage *, const char *);
 static int RuleStorageExtendCapacity(RuleStorage *);
 static void iceDeviceError(struct rte_flow_item *);
 static void DriverSpecificErrorMessage(const char *, struct rte_flow_item *);
+static bool RTEFlowRuleHasPatternWildcard(struct rte_flow_item *);
+static void InitRTEFlowDropFilter(struct rte_flow_item *, struct rte_flow_attr *, struct rte_flow_action *, const char *, const char *, uint32_t *);
+
 
 static int RuleStorageSetup(RuleStorage *rule_storage)
 {
@@ -137,6 +140,47 @@ static void DriverSpecificErrorMessage(const char *driver_name, struct rte_flow_
 }
 #endif /* RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0) */
 
+
+static void InitRTEFlowDropFilter(struct rte_flow_item *items, struct rte_flow_attr *attr, struct rte_flow_action *action, const char *driver_name, const char *port_name, uint32_t *counter_id) {
+    if (strcmp(driver_name, "net_ice") == 0) {
+        if (RTEFlowRuleHasPatternWildcard(items) == true) {
+            action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+            action[1].type = RTE_FLOW_ACTION_TYPE_END;
+            SCLogWarning("%s: gathering statistic for the rule is disabled because of wildcard pattern (ice PMD issue)", port_name);
+            return;         
+        }
+#if RTE_VERSION >= RTE_VERSION_NUM(23, 11, 0, 0)
+        attr->group = 2;
+#else
+        attr->group = 0;
+#endif /* RTE_VERSION >= RTE_VERSION_NUM(23, 11, 0, 0) */
+    }
+
+    if (strcmp(driver_name, "net_ice") == 0 || strcmp(driver_name, "mlx5_core") == 0) {
+        action[0].type = RTE_FLOW_ACTION_TYPE_COUNT;
+        action[0].conf = counter_id;
+        action[1].type = RTE_FLOW_ACTION_TYPE_DROP;
+        action[2].type = RTE_FLOW_ACTION_TYPE_END;
+    }
+    else {
+        action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+        action[1].type = RTE_FLOW_ACTION_TYPE_END;
+    }
+}
+
+static bool RTEFlowRuleHasPatternWildcard(struct rte_flow_item *items) {
+    int i = 0;
+    while (items[i].type != RTE_FLOW_ITEM_TYPE_END) {
+        if (items[i].mask != NULL || items[i].last != NULL) {
+            struct rte_flow_item_ipv4 *ipv4 = (struct rte_flow_item_ipv4*) items[i].mask;
+            SCLogWarning("type: %d, mask_src: %d mask_dst: %d", items[i].type, ipv4->hdr.src_addr, ipv4->hdr.dst_addr);
+            return true;
+        }
+        i++;
+    }
+    return false;
+}
+
 /**
  * \brief Deallocation of memory containing user set rte_flow rules
  *
@@ -196,6 +240,16 @@ int ConfigLoadRTEFlowRules(
     SCReturnInt(0);
 }
 
+/**
+ * \brief
+ *
+ * \param rte_flow_rules
+ * \param rule_count
+ * \param port_id
+ * \param filtered_packets
+ * \param flow_error
+ * \return int
+ */
 int QueryRTEFlowFilteredPackets(struct rte_flow **rte_flow_rules, uint16_t rule_count, int port_id,
         uint64_t *filtered_packets, struct rte_flow_error *flow_error)
 {
@@ -233,6 +287,7 @@ int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, const c
 {
 #if RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)
     SCEnter();
+    bool wildcard_present = false;
     int failed_count = 0;
     struct rte_flow_error flush_error = { 0 };
     struct rte_flow_attr attr = { 0 };
@@ -241,15 +296,15 @@ int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, const c
     uint32_t counter_id = 128;
 
     attr.ingress = 1;
-    if (strcmp(driver_name, "net_ice") == 0 || strcmp(driver_name, "mlx5_pci") == 0) {
-        action[0].type = RTE_FLOW_ACTION_TYPE_COUNT;
-        action[0].conf = &counter_id;
-        action[1].type = RTE_FLOW_ACTION_TYPE_DROP;
-        action[2].type = RTE_FLOW_ACTION_TYPE_END;
-    } else {
-        action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
-        action[1].type = RTE_FLOW_ACTION_TYPE_END;
-    }
+    // if (strcmp(driver_name, "net_ice") == 0 || strcmp(driver_name, "mlx5_pci") == 0) {
+    //     action[0].type = RTE_FLOW_ACTION_TYPE_COUNT;
+    //     action[0].conf = &counter_id;
+    //     action[1].type = RTE_FLOW_ACTION_TYPE_DROP;
+    //     action[2].type = RTE_FLOW_ACTION_TYPE_END;
+    // } else {
+    //     action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+    //     action[1].type = RTE_FLOW_ACTION_TYPE_END;
+    // }
 
     rule_storage->rule_handlers =
             SCMalloc(sizeof(struct rte_flow_rule *) * rule_storage->curr_rule_count);
@@ -270,6 +325,8 @@ int CreateRules(char *port_name, int port_id, RuleStorage *rule_storage, const c
             SCLogError("Error when parsing rte_flow rule: %s", rule_storage->rules[i]);
             continue;
         }
+
+        InitRTEFlowDropFilter(items, &attr, action, driver_name, port_name, &counter_id);        
 
         ret = rte_flow_validate(port_id, &attr, items, action, &flow_error);
         if (ret != 0) {
