@@ -195,7 +195,8 @@ static inline void DPDKFreeMbufArray(
     }
 }
 
-static void DevicePostStartPMDSpecificActions(DPDKThreadVars *ptv, const char *driver_name)
+static int DevicePostStartPMDSpecificActions(
+        DPDKThreadVars *ptv, DPDKIfaceConfig *dpdk_config, const char *driver_name)
 {
     if (strcmp(driver_name, "net_bonding") == 0)
         driver_name = BondingDeviceDriverGet(ptv->port_id);
@@ -207,6 +208,19 @@ static void DevicePostStartPMDSpecificActions(DPDKThreadVars *ptv, const char *d
         iceDeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
     else if (strcmp(driver_name, "mlx5_pci") == 0)
         mlx5DeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
+
+    if ((strcmp(driver_name, "mlx5_pci") == 0 || strcmp(driver_name, "net_ice") == 0 ||
+                strcmp(driver_name, "net_ixgbe") == 0)) {
+        int retval = CreateRules(
+                dpdk_config->iface, dpdk_config->port_id, &dpdk_config->drop_filter, driver_name);
+        if (retval != 0) {
+            SCLogError("%s: error when creating rte_flow rules", dpdk_config->iface);
+        }
+        ptv->livedev->dpdk_vars.flow_rule_handlers = dpdk_config->drop_filter.rule_handlers;
+        dpdk_config->drop_filter.rule_handlers = NULL;
+        ptv->livedev->dpdk_vars.flow_rule_count = dpdk_config->drop_filter.curr_rule_count;
+    }
+    SCReturnInt(0);
 }
 
 static void DevicePreClosePMDSpecificActions(DPDKThreadVars *ptv, const char *driver_name)
@@ -665,18 +679,11 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
             goto fail;
         }
 
-        retval = CreateRules(dpdk_config->iface, dpdk_config->port_id, &dpdk_config->drop_filter,
-                dev_info.driver_name);
+        retval = DevicePostStartPMDSpecificActions(ptv, dpdk_config, dev_info.driver_name);
         if (retval != 0) {
-            SCLogError("%s: error when creating rte_flow rules", dpdk_config->iface);
+            SCLogError("%s: error in Post start actions", dpdk_config->iface);
             goto fail;
         }
-
-        ptv->livedev->dpdk_vars.flow_rule_handlers = dpdk_config->drop_filter.rule_handlers;
-        dpdk_config->drop_filter.rule_handlers = NULL;
-        ptv->livedev->dpdk_vars.flow_rule_count = dpdk_config->drop_filter.curr_rule_count;
-
-        DevicePostStartPMDSpecificActions(ptv, dev_info.driver_name);
 
         uint16_t inconsistent_numa_cnt = SC_ATOMIC_GET(dpdk_config->inconsistent_numa_cnt);
         if (inconsistent_numa_cnt > 0 && ptv->port_socket_id != SOCKET_ID_ANY) {
