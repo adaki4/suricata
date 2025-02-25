@@ -116,6 +116,7 @@ typedef struct DPDKThreadVars_ {
     LiveDevice *livedev;
     ChecksumValidationMode checksum_mode;
     bool intr_enabled;
+    bool port_stopped;
     /* references to packet and drop counters */
     StatsCounterId capture_dpdk_packets;
     StatsCounterId capture_dpdk_rx_errs;
@@ -221,6 +222,7 @@ static int DevicePostStartPMDSpecificActions(
                 RteFlowRulesCreate(dpdk_config->port_id, &dpdk_config->drop_filter, driver_name);
         if (retval != 0)
             SCReturnInt(retval);
+        ptv->livedev->dpdk_vars->drop_filter = &dpdk_config->drop_filter;
     }
     SCReturnInt(0);
 }
@@ -508,6 +510,8 @@ static void HandleShutdown(DPDKThreadVars *ptv)
     while (SC_ATOMIC_GET(ptv->workers_sync->worker_checked_in) < ptv->workers_sync->worker_cnt) {
         rte_delay_us(10);
     }
+
+    DPDKDumpCounters(ptv);
     if (ptv->queue_id == 0) {
         rte_delay_us(20); // wait for all threads to get out of the sync loop
         SC_ATOMIC_SET(ptv->workers_sync->worker_checked_in, 0);
@@ -520,8 +524,8 @@ static void HandleShutdown(DPDKThreadVars *ptv)
             // in IDS we stop our port - no peer threads are running
             rte_eth_dev_stop(ptv->port_id);
         }
+        ptv->port_stopped = true;
     }
-    DPDKDumpCounters(ptv);
 }
 
 static void PeriodicDPDKDumpCounters(DPDKThreadVars *ptv)
@@ -626,6 +630,7 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
 
     ptv->threads = dpdk_config->threads;
     ptv->intr_enabled = (dpdk_config->flags & DPDK_IRQ_MODE) ? true : false;
+    ptv->port_stopped = false;
     ptv->port_id = dpdk_config->port_id;
     ptv->out_port_id = dpdk_config->out_port_id;
     ptv->port_socket_id = dpdk_config->socket_id;
