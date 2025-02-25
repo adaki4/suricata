@@ -16,25 +16,43 @@
  */
 
 /**
+ *  \defgroup dpdk DPDK rte_flow rules util functions
+ *
+ *  @{
+ */
+
+/**
  * \file
  *
  * \author Adam Kiripolsky <adam.kiripolsky@cesnet.cz>
+ *
+ * DPDK rte_flow rules util functions
+ *
  */
 
-#ifndef UTIL_DPDK_MLX5_H
-#define UTIL_DPDK_MLX5_H
-
-#include "suricata-common.h"
+#ifndef SURICATA_RTE_FLOW_RULES_H
+#define SURICATA_RTE_FLOW_RULES_H
 
 #ifdef HAVE_DPDK
 
-/* Although 2^16 rules are supported on mlx5 in rte_flow group 0,
-   rules in approximately top 10% of the capacity do not support counters */
-#define MLX5_RTE_FLOW_RULES_CAPACITY 57000
+#include "conf.h"
+#include "util-dpdk.h"
 
-int mlx5DeviceSetRSS(int port_id, uint16_t nb_rx_queues, char *port_name);
-int mlx5DeviceCheckDropFilterLimits(uint32_t rte_flow_rule_count, char **err_msg);
+typedef struct RteFlowRuleStorage_ {
+    uint32_t rule_cnt;
+    uint32_t rule_size;
+    char **rules;
+    struct rte_flow **rule_handlers;
+} RteFlowRuleStorage;
+
+void RteFlowRuleStorageFree(RteFlowRuleStorage *rule_storage);
+int ConfigLoadRteFlowRules(
+        SCConfNode *if_root, const char *drop_filter_str, RteFlowRuleStorage *rule_storage);
+int RteFlowRulesCreate(
+        uint16_t port_id, RteFlowRuleStorage *rule_storage, const char *driver_name);
 
 #endif /* HAVE_DPDK */
-
-#endif /* UTIL_DPDK_MLX5_H */
+#endif /* SURICATA_RTE_FLOW_RULES_H */
+/**
+ * @}
+ */
