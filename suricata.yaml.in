@@ -817,6 +817,10 @@ dpdk:
       # - ips: the same as tap mode but it also drops packets that are flagged by rules to be dropped
       copy-mode: none
       copy-iface: none # or PCIe address of the second interface
+      # Flow patterns in dpdk-testpmd syntax for flows that are supposed to be dropped directly in the NIC.
+      # If the pattern is invalid or unsupported, Suricata will not start.
+      # Example: "pattern eth / ipv4 src is 16.0.25.0 / udp / end" 
+      drop-filter: none 
 
     - interface: default
       threads: auto
@@ -833,6 +837,7 @@ dpdk:
       tx-descriptors: 1024
       copy-mode: none
       copy-iface: none
+      drop-filter: none
 
 
 # Cross platform libpcap capture support

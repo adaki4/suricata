@@ -124,6 +124,24 @@ void iceDeviceSetRSSConf(struct rte_eth_rss_conf *rss_conf)
     rss_conf->rss_key_len = 52;
 }
 
+/**
+ * \brief Check and log whether pattern is broad / not-specific
+ *        as ice does not these patterns
+ *
+ * \param items array of pattern items
+ */
+void iceDeviceRteFlowPatternError(struct rte_flow_item *items)
+{
+    int i = 0;
+    while (items[i].type != RTE_FLOW_ITEM_TYPE_END) {
+        if (items[i].spec != NULL) {
+            SCReturn;
+        }
+        ++i;
+    }
+    SCLogError("ice driver does not support broad patterns");
+}
+
 #endif /* HAVE_DPDK */
 /**
  * @}
