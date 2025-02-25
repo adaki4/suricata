@@ -54,6 +54,7 @@
 
 #define RULE_STORAGE_INIT_SIZE 8
 #define RULE_STORAGE_SIZE_INC  16
+#define COUNT_ACTION_ID        1
 
 #if RTE_VERSION >= RTE_VERSION_NUM(21, 11, 0, 0)
 #define RTE_JUMP_GROUP               1
@@ -106,7 +107,6 @@ static char *DriverSpecificErrorMessage(const char *driver_name, struct rte_flow
             return ret;
         }
     }
-
     return NULL;
 }
 
@@ -471,6 +471,11 @@ int RteFlowRulesCreate(uint16_t port_id, RteFlowRuleStorage *rule_storage, const
         SCReturnInt(-ENOTSUP);
     }
     SCLogInfo("%s: %i rte_flow rules created for drop-filter", port_name, rule_storage->rule_cnt);
+
+    if (!RteFlowShouldGatherStats(rule_storage, driver_name, port_name)) {
+        SCFree(rule_storage->rule_handlers);
+        rule_storage->rule_cnt = 0;
+    }
 #endif /* RTE_VERSION >= RTE_VERSION_NUM(21, 11, 0, 0)*/
     SCReturnInt(0);
 }
