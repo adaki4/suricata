@@ -26,6 +26,7 @@
 
 #ifdef HAVE_DPDK
 
+#include "util-dpdk-rte-flow.h"
 #include <rte_eal.h>
 #include <rte_ethdev.h>
 #ifdef HAVE_DPDK_BOND

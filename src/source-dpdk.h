@@ -26,6 +26,7 @@
 
 #include "suricata-common.h"
 #include "util-dpdk.h"
+#include "util-dpdk-rte-flow.h"
 
 #ifdef HAVE_DPDK
 #include <rte_ethdev.h>
