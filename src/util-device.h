@@ -18,6 +18,10 @@
 #ifndef SURICATA_UTIL_DEVICE_H
 #define SURICATA_UTIL_DEVICE_H
 
+#ifdef HAVE_DPDK
+#include <rte_flow.h>
+#endif /* HAVE_DPDK */
+
 #ifdef __cplusplus
 extern "C"
 {
