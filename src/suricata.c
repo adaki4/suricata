@@ -2822,6 +2822,11 @@ int PostConfLoadedSetup(SCInstance *suri)
         LiveDevRegisterExtension();
     }
 #endif
+#ifdef HAVE_DPDK
+    if (suri->run_mode == RUNMODE_DPDK) {
+        LiveDevRegisterExtension();
+    }
+#endif
     RegisterFlowBypassInfo();
 
     MacSetRegisterFlowStorage();
