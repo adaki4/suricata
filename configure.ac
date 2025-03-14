@@ -2425,7 +2425,7 @@ return 0;
 if test "${enable_ebpf}" = "yes" || test "${enable_unittests}" = "yes"; then
   AC_DEFINE([CAPTURE_OFFLOAD_MANAGER], [1],[Building flow bypass manager code])
 fi
-if test "${enable_ebpf}" = "yes" || test "${enable_nfqueue}" = "yes" || test "${enable_pfring}" = "yes" || test "${enable_napatech}" = "yes"  || test "${enable_unittests}" = "yes"; then
+if test "${enable_ebpf}" = "yes" || test "${enable_nfqueue}" = "yes" || test "${enable_pfring}" = "yes" || test "${enable_napatech}" = "yes"  || test "${enable_unittests}" = "yes" || test "${enable_dpdk}" = "yes"; then
   AC_DEFINE([CAPTURE_OFFLOAD], [1],[Building flow capture bypass code])
 fi
 

@@ -395,6 +395,146 @@ int RteFlowRulesCreate(
     SCReturnInt(0);
 }
 
+static int CreateRteFlowBypassRule(struct rte_flow_item *items, int port_id)
+{
+    struct rte_flow_error flow_error = { 0 };
+    struct rte_flow_attr attr = { 0 };
+    struct rte_flow_action action[] = { { 0 }, { 0 } };
+
+    attr.ingress = 1;
+    attr.priority = 0;
+
+    action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+    action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+    int retval = rte_flow_validate(port_id, &attr, items, action, &flow_error);
+    if (retval != 0) {
+        SCLogError("rte_flow bypass rule validation error: %s, errmsg: %s", rte_strerror(-retval),
+                flow_error.message);
+        return retval;
+    }
+
+    struct rte_flow *flow_handler = rte_flow_create(port_id, &attr, items, action, &flow_error);
+    if (flow_handler == NULL) {
+        SCLogError("rte_flow bypass rule creation error: %s", flow_error.message);
+        return -1;
+    }
+    SCLogDebug("rte_flow bypass rule created");
+    return 0;
+}
+
+static void RteFlowFreeBypassItems(
+        struct rte_flow_item items[], uint16_t start_index, uint16_t end_index)
+{
+    for (uint16_t i = start_index; i <= end_index; i++) {
+        if (items[i].spec != NULL) {
+            SCFree((void *)items[i].spec);
+        }
+        if (items[i].mask != NULL) {
+            SCFree((void *)items[i].mask);
+        }
+    }
+}
+
+int RteFlowBypassCallback(Packet *p)
+{
+    SCLogDebug("Calling rte_flow callback function");
+    /* Only bypass TCP and UDP */
+    if (!(PacketIsTCP(p) || PacketIsUDP(p))) {
+        return 0;
+    }
+
+    if (p->flow == NULL) {
+        return 0;
+    }
+
+    struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 } };
+
+    void *ip_spec = SCCalloc(1, (PacketIsIPv4(p)) ? sizeof(struct rte_flow_item_ipv4)
+                                                  : sizeof(struct rte_flow_item_ipv6));
+    if (ip_spec == NULL) {
+        SCLogError("Failed to allocate memory for ip_spec");
+        return -1;
+    }
+    void *ip_mask = SCCalloc(1, (PacketIsIPv4(p)) ? sizeof(struct rte_flow_item_ipv4)
+                                                  : sizeof(struct rte_flow_item_ipv6));
+    if (ip_mask == NULL) {
+        SCLogError("Failed to allocate memory for ip_mask");
+        return -1;
+    }
+
+    if (PacketIsIPv4(p)) {
+        SCLogDebug("Add an IPv4 rte_flow bypass rule");
+        struct rte_flow_item_ipv4 *spec = (struct rte_flow_item_ipv4 *)ip_spec;
+        struct rte_flow_item_ipv4 *mask = (struct rte_flow_item_ipv4 *)ip_mask;
+
+        spec->hdr.src_addr = (GET_IPV4_SRC_ADDR_U32(p));
+        mask->hdr.src_addr = 0xFFFFFFFF;
+        spec->hdr.dst_addr = (GET_IPV4_DST_ADDR_U32(p));
+        mask->hdr.dst_addr = 0xFFFFFFFF;
+        items[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
+
+    } else if (PacketIsIPv6(p)) {
+        SCLogDebug("Add an IPv6 rte_flow bypass rule");
+        struct rte_flow_item_ipv6 *spec = (struct rte_flow_item_ipv6 *)ip_spec;
+        struct rte_flow_item_ipv6 *mask = (struct rte_flow_item_ipv6 *)ip_mask;
+
+        for (uint8_t i = 0; i < 16; i++) {
+            spec->hdr.src_addr[i] = (GET_IPV6_SRC_ADDR(p)[i / 4]) >> (8 * (i % 4));
+            mask->hdr.src_addr[i] = 0xFF;
+            spec->hdr.dst_addr[i] = (GET_IPV6_DST_ADDR(p)[i / 4]) >> (8 * (i % 4));
+            mask->hdr.dst_addr[i] = 0xFF;
+        }
+        items[1].type = RTE_FLOW_ITEM_TYPE_IPV6;
+    }
+
+    void *l4_spec = SCCalloc(1, (p->proto == IPPROTO_TCP) ? sizeof(struct rte_flow_item_tcp)
+                                                          : sizeof(struct rte_flow_item_udp));
+    if (l4_spec == NULL) {
+        SCLogError("Failed to allocate memory for l4_spec");
+        RteFlowFreeBypassItems(items, 1, 2);
+        return -1;
+    }
+    void *l4_mask = SCCalloc(1, (p->proto == IPPROTO_TCP) ? sizeof(struct rte_flow_item_tcp)
+                                                          : sizeof(struct rte_flow_item_udp));
+    if (l4_spec == NULL) {
+        SCLogError("Failed to allocate memory for l4_mask");
+        return -1;
+    }
+
+    if (p->proto == IPPROTO_TCP) {
+        struct rte_flow_item_tcp *spec = (struct rte_flow_item_tcp *)l4_spec;
+        struct rte_flow_item_tcp *mask = (struct rte_flow_item_tcp *)l4_mask;
+        spec->hdr.src_port = htons(p->sp);
+        mask->hdr.src_port = 0xFFFF;
+        spec->hdr.dst_port = htons(p->dp);
+        mask->hdr.dst_port = 0xFFFF;
+        items[2].type = RTE_FLOW_ITEM_TYPE_TCP;
+
+    } else if (p->proto == IPPROTO_UDP) {
+        struct rte_flow_item_udp *spec = (struct rte_flow_item_udp *)l4_spec;
+        struct rte_flow_item_udp *mask = (struct rte_flow_item_udp *)l4_mask;
+        spec->hdr.src_port = htons(p->sp);
+        mask->hdr.src_port = 0xFFFF;
+        spec->hdr.dst_port = htons(p->dp);
+        mask->hdr.dst_port = 0xFFFF;
+        items[2].type = RTE_FLOW_ITEM_TYPE_UDP;
+    }
+
+    items[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+    items[1].spec = ip_spec;
+    items[1].mask = ip_mask;
+    items[2].spec = l4_spec;
+    items[2].mask = l4_mask;
+    items[3].type = RTE_FLOW_ITEM_TYPE_END;
+
+    int retval = CreateRteFlowBypassRule(items, p->dpdk_v.mbuf->port);
+
+    RteFlowFreeBypassItems(items, 1, 2);
+
+    return retval;
+}
+
 #endif /* HAVE_DPDK */
 /**
  * @}
