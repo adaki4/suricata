@@ -39,9 +39,6 @@
 #ifdef HAVE_DPDK
 
 #define MLX5_RSS_HKEY_LEN 40
-/* Although 2^16 rules are supported on mlx5 in rte_flow group 0,
-   rules in approximately top 10% of the capacity do not support counters */
-#define MLX5_MAX_RTE_FLOW_RULES 57000
 
 int mlx5DeviceSetRSS(int port_id, uint16_t nb_rx_queues, char *port_name)
 {
