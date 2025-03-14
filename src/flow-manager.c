@@ -247,8 +247,9 @@ static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters
         uint64_t pkts_todst = fc->todstpktcnt;
         uint64_t bytes_todst = fc->todstbytecnt;
         bool update = fc->BypassUpdate(f, fc->bypass_data, SCTIME_SECS(ts));
-        if (update) {
-            SCLogDebug("Updated flow: %" PRIu64 "", FlowGetId(f));
+        const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
+        if (update || shutdown) {
+            SCLogDebug("Updated flow: %" PRId64 "", FlowGetId(f));
             pkts_tosrc = fc->tosrcpktcnt - pkts_tosrc;
             bytes_tosrc = fc->tosrcbytecnt - bytes_tosrc;
             pkts_todst = fc->todstpktcnt - pkts_todst;
