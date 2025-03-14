@@ -45,6 +45,7 @@ int CreateRteFlowRules(char *port_name, int port_id, RteFlowRuleStorage *rte_flo
         const char *driver_name);
 uint64_t QueryRteFlowFilteredPackets(struct rte_flow **rte_flow_rules, uint16_t rule_count,
         char *device_name, int port_id, uint64_t *filtered_packets);
+int RteFlowBypassCallback(Packet *);
 
 #endif /* HAVE_DPDK */
 #endif /* SURICATA_RTE_FLOW_RULES_H */
