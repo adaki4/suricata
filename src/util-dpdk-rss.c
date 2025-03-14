@@ -101,7 +101,7 @@ int DPDKCreateRSSFlowGeneric(
     struct rte_flow_error flow_error = { 0 };
     struct rte_flow_item pattern[] = { { 0 }, { 0 } };
 
-    rss_conf.types = RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_IPV6;
+    rss_conf.types = RTE_ETH_RSS_TCP | RTE_ETH_RSS_UDP;
 
     attr.ingress = 1;
     attr.priority = 1;
