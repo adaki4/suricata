@@ -87,6 +87,7 @@ TmEcode NoDPDKSupportExit(ThreadVars *tv, const void *initdata, void **data)
 
 #else /* We have DPDK support */
 
+#include "flow-private.h"
 #include "util-affinity.h"
 #include "util-dpdk.h"
 #include "util-dpdk-i40e.h"
@@ -104,6 +105,7 @@ TmEcode NoDPDKSupportExit(ThreadVars *tv, const void *initdata, void **data)
 #define STANDARD_SLEEP_TIME_US       100U
 #define MAX_EPOLL_TIMEOUT_MS         500U
 static rte_spinlock_t intr_lock[RTE_MAX_ETHPORTS];
+SC_ATOMIC_EXTERN(unsigned int, flow_flags);
 
 /**
  * \brief Structure to hold thread specific variables.
