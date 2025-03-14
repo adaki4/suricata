@@ -26,7 +26,6 @@
 
 #ifdef HAVE_DPDK
 
-#include "util-dpdk-rte-flow.h"
 #include <rte_eal.h>
 #include <rte_ethdev.h>
 #ifdef HAVE_DPDK_BOND
@@ -118,15 +117,7 @@
 #define RTE_ETH_LINK_MAX_STR_LEN 40
 #endif
 
-typedef struct {
-    struct rte_mempool **pkt_mp;
-    uint16_t pkt_mp_cnt;
-    uint16_t pkt_mp_capa;
-    RteFlowRuleStorage *drop_filter;
-} DPDKDeviceResources;
-
-int DPDKDeviceResourcesInit(DPDKDeviceResources **dpdk_vars, uint16_t mp_cnt);
-void DPDKDeviceResourcesDeinit(DPDKDeviceResources **dpdk_vars);
+uint32_t MempoolCacheSizeCalculate(uint32_t mp_sz);
 
 #endif /* HAVE_DPDK */
 

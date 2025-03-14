@@ -26,7 +26,6 @@
 
 #include "suricata-common.h"
 #include "util-dpdk.h"
-#include "util-dpdk-rte-flow.h"
 
 #ifdef HAVE_DPDK
 #include <rte_ethdev.h>
@@ -75,6 +74,7 @@ typedef struct DPDKIfaceConfig_ {
     uint32_t mempool_size;
     uint32_t mempool_cache_size;
     DPDKDeviceResources *pkt_mempools;
+    uint32_t bypass_ring_size;
     uint16_t linkup_timeout; // in seconds how long to wait for link to come up
     RteFlowRuleStorage drop_filter;
     SC_ATOMIC_DECLARE(uint16_t, ref);

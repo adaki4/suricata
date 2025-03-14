@@ -246,8 +246,9 @@ static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters
         uint64_t pkts_todst = fc->todstpktcnt;
         uint64_t bytes_todst = fc->todstbytecnt;
         bool update = fc->BypassUpdate(f, fc->bypass_data, SCTIME_SECS(ts));
-        if (update) {
-            SCLogDebug("Updated flow: %" PRIu64 "", FlowGetId(f));
+        const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
+        if (update || shutdown) {
+            SCLogDebug("Updated flow: %" PRId64 "", FlowGetId(f));
             pkts_tosrc = fc->tosrcpktcnt - pkts_tosrc;
             bytes_tosrc = fc->tosrcbytecnt - bytes_tosrc;
             pkts_todst = fc->todstpktcnt - pkts_todst;
@@ -357,7 +358,8 @@ static void FlowManagerHashRowTimeout(FlowManagerTimeoutThread *td, Flow *f, SCT
          * be modified when we have both the flow and hash row lock */
 
         /* timeout logic goes here */
-        if (!FlowManagerFlowTimeout(f, ts, next_ts, emergency)) {
+        const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
+        if (!shutdown && !FlowManagerFlowTimeout(f, ts, next_ts, emergency)) {
             FLOWLOCK_UNLOCK(f);
             counters->flows_notimeout++;
 
@@ -448,21 +450,27 @@ static uint32_t FlowTimeoutHash(FlowManagerTimeoutThread *td, SCTime_t ts, const
 #endif
 
     const uint32_t ts_secs = (uint32_t)SCTIME_SECS(ts);
+    const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
     for (uint32_t idx = hash_min; idx < hash_max; idx+=BITS) {
         TYPE check_bits = 0;
         const uint32_t check = MIN(BITS, (hash_max - idx));
-        for (uint32_t i = 0; i < check; i++) {
-            FlowBucket *fb = &flow_hash[idx+i];
-            check_bits |= (TYPE)(SC_ATOMIC_LOAD_EXPLICIT(
-                                         fb->next_ts, SC_ATOMIC_MEMORY_ORDER_RELAXED) <= ts_secs)
-                          << (TYPE)i;
+        if (!shutdown) {
+            for (uint32_t i = 0; i < check; i++) {
+                FlowBucket *fb = &flow_hash[idx + i];
+                check_bits |= (TYPE)(SC_ATOMIC_LOAD_EXPLICIT(fb->next_ts,
+                                             SC_ATOMIC_MEMORY_ORDER_RELAXED) <= ts_secs)
+                              << (TYPE)i;
+            }
+            if (check_bits == 0)
+                continue;
+        } else {
+            check_bits = ~check_bits;
         }
-        if (check_bits == 0)
-            continue;
-
         for (uint32_t i = 0; i < check; i++) {
             FlowBucket *fb = &flow_hash[idx+i];
-            if ((check_bits & ((TYPE)1 << (TYPE)i)) != 0 && SC_ATOMIC_GET(fb->next_ts) <= ts_secs) {
+            if (((check_bits & ((TYPE)1 << (TYPE)i)) != 0 &&
+                        SC_ATOMIC_GET(fb->next_ts) <= ts_secs) ||
+                    shutdown) {
                 FBLOCK_LOCK(fb);
                 Flow *evicted = NULL;
                 if (fb->evicted != NULL || fb->head != NULL) {
@@ -970,6 +978,14 @@ static TmEcode FlowManager(ThreadVars *th_v, void *thread_data)
         }
 
         if (TmThreadsCheckFlag(th_v, THV_KILL)) {
+            SC_ATOMIC_OR(flow_flags, FLOW_SHUTDOWN);
+            // clang-format off
+            FlowTimeoutCounters counters = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, };
+            // clang-format on
+            /*Pass through all flows to gather counters from bypassed flows*/
+            FlowTimeoutHash(&ftd->timeout, ts, ftd->min, ftd->max, &counters);
+            FlowCountersUpdate(th_v, ftd, &counters);
+            SC_ATOMIC_OR(flow_flags, FLOW_SHUTDOWN_END);
             StatsSyncCounters(&th_v->stats);
             break;
         }
