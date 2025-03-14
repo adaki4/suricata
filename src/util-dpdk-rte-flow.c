@@ -392,6 +392,143 @@ int CreateRteFlowRules(char *port_name, int port_id, RteFlowRuleStorage *rte_flo
     SCReturnInt(0);
 }
 
+
+static int CreateRteFlowBypassRule(struct rte_flow_item *items, int port_id)
+{
+    struct rte_flow_error flow_error = { 0 };
+    struct rte_flow_attr attr = { 0 };
+    struct rte_flow_action action[] = { { 0 }, { 0 } };
+
+    attr.ingress = 1;
+    attr.priority = 0;
+
+    action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+    action[1].type = RTE_FLOW_ACTION_TYPE_END;
+    struct rte_flow_item_ipv4 *hdr = (struct rte_flow_item_ipv4*) items[1].spec;
+
+    struct rte_flow_item_tcp *tcp_hdr = (struct rte_flow_item_tcp*) items[2].spec;
+    
+    // SCLogInfo("%d", hdr->hdr.src_addr);
+    // SCLogInfo("%d", hdr->hdr.dst_addr);
+
+    // SCLogInfo("%d", tcp_hdr->hdr.src_port);
+    // SCLogInfo("%d", tcp_hdr->hdr.dst_port);
+
+    int retval = rte_flow_validate(port_id, &attr, items, action, &flow_error);
+    if (retval != 0) {
+        SCLogError("rte_flow bypass rule validation error: %s, errmsg: %s", rte_strerror(-retval),
+                flow_error.message);
+        return retval;
+    }
+
+    struct rte_flow *flow_handler = rte_flow_create(port_id, &attr, items, action, &flow_error);
+    if (flow_handler == NULL) {
+        SCLogError("rte_flow bypass rule creation error: %s", flow_error.message);
+        return -1;
+    }
+    SCLogDebug("rte_flow bypass rule created");
+    return 0;
+    
+}
+
+// static void ParseIPv6Addr(uint32_t ipv6_int, uint8_t ipv6_arr[16])
+// {
+//     while (ipv6_int != 0)
+//     for (int i = 0; i < 16; i++) {
+//         ipv6_arr[i] = ipv6_arr && (1 << 7);
+//         ipv6_int = ipv6_int >> 8;
+//     }
+// }
+int RteFlowBypassCallback(Packet *p)
+{
+    SCLogDebug("Calling rte_flow callback function");
+    /* Only bypass TCP and UDP */
+    if (!(PacketIsTCP(p) || PacketIsUDP(p))) {
+        return 0;
+    }
+
+    if (p->flow == NULL) {
+        return 0;
+    }
+
+    struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 } };
+    items[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+    items[3].type = RTE_FLOW_ITEM_TYPE_END;
+
+    if (PacketIsIPv4(p)) {
+        SCLogDebug("add an IPv4 rte_flow rule");
+        struct rte_flow_item_ipv4 *ipv4_spec;
+
+        ipv4_spec = SCCalloc(1, sizeof(struct rte_flow_item_ipv4));
+        if (ipv4_spec == NULL) {
+            SCLogError("Failed to allocate memory for ip_spec");
+            return -1;
+        }
+
+        ipv4_spec->hdr.src_addr = (GET_IPV4_SRC_ADDR_U32(p));
+        ipv4_spec->hdr.dst_addr = (GET_IPV4_DST_ADDR_U32(p));
+
+        SCLogInfo("%d", ipv4_spec->hdr.src_addr);
+        SCLogInfo("%d", ipv4_spec->hdr.dst_addr);
+
+        items[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
+        //items[1].spec = ipv4_spec;
+    }
+
+    if (PacketIsIPv6(p)) {
+        SCLogDebug("add an IPv6 rte_flow rule");
+        struct rte_flow_item_ipv6 ipv6 = { 0 };
+
+        for (uint8_t i = 0; i < 16; i++) {
+            ipv6.hdr.src_addr[i] = ntohl(GET_IPV6_SRC_ADDR(p)[i/4]) << (8 * (i % 4));
+            ipv6.hdr.dst_addr[i] = ntohl(GET_IPV6_DST_ADDR(p)[i/4]) << (8 * (i % 4));
+        }
+        items[1].type = RTE_FLOW_ITEM_TYPE_IPV6;
+        items[1].spec = &ipv6;
+    }
+
+    if (p->proto == IPPROTO_TCP) {
+        struct rte_flow_item_tcp *l4_spec;
+        l4_spec = SCCalloc(1, sizeof(struct rte_flow_item_tcp));
+        if (l4_spec == NULL) {
+            SCLogError("Failed to allocate memory for l4_spec");
+            return -1;
+        }
+    
+        l4_spec->hdr.src_port = p->sp;
+        l4_spec->hdr.dst_port = p->dp;
+        
+        SCLogInfo("%d", l4_spec->hdr.src_port);
+        SCLogInfo("%d", l4_spec->hdr.dst_port);
+
+        items[2].type = RTE_FLOW_ITEM_TYPE_TCP;
+        items[2].spec = l4_spec;
+
+    } else if (p->proto == IPPROTO_UDP) {
+        struct rte_flow_item_udp *l4_spec;
+        l4_spec = SCCalloc(1, sizeof(struct rte_flow_item_udp));
+        if (l4_spec == NULL) {
+            SCLogError("Failed to allocate memory for l4_spec");
+            return -1;
+        }
+    
+        l4_spec->hdr.src_port = p->sp;
+        l4_spec->hdr.dst_port = p->dp;
+        
+        SCLogInfo("%d", l4_spec->hdr.src_port);
+        SCLogInfo("%d", l4_spec->hdr.dst_port);
+
+        items[2].type = RTE_FLOW_ITEM_TYPE_TCP;
+        items[2].spec = l4_spec;
+    }
+
+    items[2].type = RTE_FLOW_ITEM_TYPE_END;
+
+    return CreateRteFlowBypassRule(items, p->dpdk_v.in_port_id);
+
+}
+ 
+
 #endif /* HAVE_DPDK */
 /**
  * @}
