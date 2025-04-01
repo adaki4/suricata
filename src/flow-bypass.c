@@ -27,6 +27,7 @@
 #include "flow-bypass.h"
 #include "flow-private.h"
 #include "util-ebpf.h"
+#include "util-dpdk-rte-flow.h"
 #include "runmodes.h"
 
 #ifdef CAPTURE_OFFLOAD_MANAGER
@@ -122,6 +123,9 @@ static TmEcode BypassedFlowManager(ThreadVars *th_v, void *thread_data)
                 StatsSyncCounters(th_v);
                 return TM_ECODE_OK;
             }
+#ifdef HAVE_DPDK
+            RteFlowBypassRuleLoad();
+#endif
             StatsSyncCountersIfSignalled(th_v);
             SleepMsec(10);
         }

@@ -31,12 +31,16 @@
  */
 
 #include "decode.h"
+#include "flow-bypass.h"
 #include "runmode-dpdk.h"
 #include "util-debug.h"
 #include "util-dpdk.h"
 #include "util-dpdk-ice.h"
 #include "util-dpdk-rte-flow.h"
 #include "util-dpdk-rte-flow-pattern.h"
+#include "runmodes.h"
+#include <net/if.h>
+#include <rte_ring.h>
 
 #ifdef HAVE_DPDK
 #if RTE_VERSION >= RTE_VERSION_NUM(21, 0, 0, 0)
@@ -44,6 +48,8 @@
 #define INITIAL_RTE_FLOW_RULE_COUNT_CAPACITY 5
 #define DATA_BUFFER_SIZE                     1024
 #define COUNT_ACTION_ID                      128
+#define RTE_BYPASS_RING_SIZE                 1024
+#define RTE_BYPASS_RING_NAME                 "rte_bypass_ring"
 
 static int RteFlowRuleStorageInit(RteFlowRuleStorage *);
 static int RteFlowRuleStorageAddRule(RteFlowRuleStorage *, const char *);
@@ -52,6 +58,9 @@ static char *DriverSpecificErrorMessage(const char *, struct rte_flow_item *);
 static bool RteFlowRulesContainPatternWildcard(char **, uint32_t);
 static bool RteFlowDropFilterInit(uint32_t, char **, struct rte_flow_attr *,
         struct rte_flow_action *, uint32_t *, const char *, const char *);
+static int RteFlowBypassRuleCreate(struct rte_flow_item *items, int port_id);
+
+struct rte_ring *rte_bypass_ring;
 
 /**
  * \brief Specify ambiguous error messages as some drivers have specific
@@ -395,7 +404,27 @@ int RteFlowRulesCreate(
     SCReturnInt(0);
 }
 
-static int CreateRteFlowBypassRule(struct rte_flow_item *items, int port_id)
+/**
+ * \brief Enable and register functions for BypassManager, 
+ *        initialize rte_ring data structure and store in global 
+ *        variable  
+ * 
+ * \param port_name 
+ */
+
+void RteBypassInit(const char *port_name) {
+    RunModeEnablesBypassManager();
+    BypassedFlowManagerRegisterCheckFunc(NULL, RteFlowCheckBypassedFlowCreate, NULL);
+    BypassedFlowManagerRegisterUpdateFunc(RteFlowUpdateFlow, NULL);
+    // Possibly change SOCKET_ID_ANY to Numa id
+    rte_bypass_ring = rte_ring_create(RTE_BYPASS_RING_NAME, RTE_BYPASS_RING_SIZE, SOCKET_ID_ANY, RING_F_SC_DEQ);
+    if (rte_bypass_ring == NULL) {
+        SCLogError("%s: rte_ring_create failed with code %d (ring: %s): %s",
+                port_name, rte_errno, RTE_BYPASS_RING_NAME, rte_strerror(rte_errno));
+    }
+}
+
+static int RteFlowBypassRuleCreate(struct rte_flow_item *items, int port_id)
 {
     struct rte_flow_error flow_error = { 0 };
     struct rte_flow_attr attr = { 0 };
@@ -423,101 +452,70 @@ static int CreateRteFlowBypassRule(struct rte_flow_item *items, int port_id)
     return 0;
 }
 
-static void RteFlowFreeBypassItems(
-        struct rte_flow_item items[], uint16_t start_index, uint16_t end_index)
+int RteFlowBypassRuleLoad()
 {
-    for (uint16_t i = start_index; i <= end_index; i++) {
-        if (items[i].spec != NULL) {
-            SCFree((void *)items[i].spec);
-        }
-        if (items[i].mask != NULL) {
-            SCFree((void *)items[i].mask);
-        }
-    }
-}
+    void *data = NULL;
 
-int RteFlowBypassCallback(Packet *p)
-{
-    SCLogDebug("Calling rte_flow callback function");
+    int retval = rte_ring_dequeue(rte_bypass_ring, &data);
+    if (retval != 0) {
+        return -ENOENT;
+    }
+
+    Packet *p = (Packet *)data;
+
     /* Only bypass TCP and UDP */
     if (!(PacketIsTCP(p) || PacketIsUDP(p))) {
         return 0;
     }
 
-    if (p->flow == NULL) {
-        return 0;
-    }
-
     struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 } };
+    struct rte_flow_item_ipv4 ipv4_spec = { 0 }, ipv4_mask = { 0 };
+    struct rte_flow_item_ipv6 ipv6_spec = { 0 }, ipv6_mask = { 0 };
+    struct rte_flow_item_tcp tcp_spec = { 0 }, tcp_mask = { 0 };
+    struct rte_flow_item_udp udp_spec = { 0 }, udp_mask = { 0 };
 
-    void *ip_spec = SCCalloc(1, (PacketIsIPv4(p)) ? sizeof(struct rte_flow_item_ipv4)
-                                                  : sizeof(struct rte_flow_item_ipv6));
-    if (ip_spec == NULL) {
-        SCLogError("Failed to allocate memory for ip_spec");
-        return -1;
-    }
-    void *ip_mask = SCCalloc(1, (PacketIsIPv4(p)) ? sizeof(struct rte_flow_item_ipv4)
-                                                  : sizeof(struct rte_flow_item_ipv6));
-    if (ip_mask == NULL) {
-        SCLogError("Failed to allocate memory for ip_mask");
-        return -1;
-    }
+    void *ip_spec = NULL, *ip_mask = NULL, *l4_spec = NULL, *l4_mask = NULL; 
 
     if (PacketIsIPv4(p)) {
         SCLogDebug("Add an IPv4 rte_flow bypass rule");
-        struct rte_flow_item_ipv4 *spec = (struct rte_flow_item_ipv4 *)ip_spec;
-        struct rte_flow_item_ipv4 *mask = (struct rte_flow_item_ipv4 *)ip_mask;
-
-        spec->hdr.src_addr = (GET_IPV4_SRC_ADDR_U32(p));
-        mask->hdr.src_addr = 0xFFFFFFFF;
-        spec->hdr.dst_addr = (GET_IPV4_DST_ADDR_U32(p));
-        mask->hdr.dst_addr = 0xFFFFFFFF;
+        ipv4_spec.hdr.src_addr = (GET_IPV4_SRC_ADDR_U32(p));
+        ipv4_mask.hdr.src_addr = 0xFFFFFFFF;
+        ipv4_spec.hdr.dst_addr = (GET_IPV4_DST_ADDR_U32(p));
+        ipv4_mask.hdr.dst_addr = 0xFFFFFFFF;
+        ip_spec = &ipv4_spec;
+        ip_mask = &ipv4_mask;
         items[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
 
     } else if (PacketIsIPv6(p)) {
         SCLogDebug("Add an IPv6 rte_flow bypass rule");
-        struct rte_flow_item_ipv6 *spec = (struct rte_flow_item_ipv6 *)ip_spec;
-        struct rte_flow_item_ipv6 *mask = (struct rte_flow_item_ipv6 *)ip_mask;
-
         for (uint8_t i = 0; i < 16; i++) {
-            spec->hdr.src_addr[i] = (GET_IPV6_SRC_ADDR(p)[i / 4]) >> (8 * (i % 4));
-            mask->hdr.src_addr[i] = 0xFF;
-            spec->hdr.dst_addr[i] = (GET_IPV6_DST_ADDR(p)[i / 4]) >> (8 * (i % 4));
-            mask->hdr.dst_addr[i] = 0xFF;
+            ipv6_spec.hdr.src_addr[i] = (GET_IPV6_SRC_ADDR(p)[i / 4]) >> (8 * (i % 4));
+            ipv6_mask.hdr.src_addr[i] = 0x00;
+            ipv6_spec.hdr.dst_addr[i] = (GET_IPV6_DST_ADDR(p)[i / 4]) >> (8 * (i % 4));
+            ipv6_mask.hdr.dst_addr[i] = 0x00;
         }
+
+        ip_spec = &ipv6_spec;
+        ip_mask = &ipv6_mask;
         items[1].type = RTE_FLOW_ITEM_TYPE_IPV6;
     }
 
-    void *l4_spec = SCCalloc(1, (p->proto == IPPROTO_TCP) ? sizeof(struct rte_flow_item_tcp)
-                                                          : sizeof(struct rte_flow_item_udp));
-    if (l4_spec == NULL) {
-        SCLogError("Failed to allocate memory for l4_spec");
-        RteFlowFreeBypassItems(items, 1, 2);
-        return -1;
-    }
-    void *l4_mask = SCCalloc(1, (p->proto == IPPROTO_TCP) ? sizeof(struct rte_flow_item_tcp)
-                                                          : sizeof(struct rte_flow_item_udp));
-    if (l4_spec == NULL) {
-        SCLogError("Failed to allocate memory for l4_mask");
-        return -1;
-    }
-
     if (p->proto == IPPROTO_TCP) {
-        struct rte_flow_item_tcp *spec = (struct rte_flow_item_tcp *)l4_spec;
-        struct rte_flow_item_tcp *mask = (struct rte_flow_item_tcp *)l4_mask;
-        spec->hdr.src_port = htons(p->sp);
-        mask->hdr.src_port = 0xFFFF;
-        spec->hdr.dst_port = htons(p->dp);
-        mask->hdr.dst_port = 0xFFFF;
+        tcp_spec.hdr.src_port = htons(p->sp);
+        tcp_mask.hdr.src_port = 0xFFFF;
+        tcp_spec.hdr.dst_port = htons(p->dp);
+        tcp_mask.hdr.dst_port = 0xFFFF;
+        l4_spec = &tcp_spec;
+        l4_mask = &tcp_mask;
         items[2].type = RTE_FLOW_ITEM_TYPE_TCP;
 
     } else if (p->proto == IPPROTO_UDP) {
-        struct rte_flow_item_udp *spec = (struct rte_flow_item_udp *)l4_spec;
-        struct rte_flow_item_udp *mask = (struct rte_flow_item_udp *)l4_mask;
-        spec->hdr.src_port = htons(p->sp);
-        mask->hdr.src_port = 0xFFFF;
-        spec->hdr.dst_port = htons(p->dp);
-        mask->hdr.dst_port = 0xFFFF;
+        udp_spec.hdr.src_port = htons(p->sp);
+        udp_mask.hdr.src_port = 0xFFFF;
+        udp_spec.hdr.dst_port = htons(p->dp);
+        udp_mask.hdr.dst_port = 0xFFFF;
+        l4_spec = &udp_spec;
+        l4_mask = &udp_mask;
         items[2].type = RTE_FLOW_ITEM_TYPE_UDP;
     }
 
@@ -528,13 +526,77 @@ int RteFlowBypassCallback(Packet *p)
     items[2].mask = l4_mask;
     items[3].type = RTE_FLOW_ITEM_TYPE_END;
 
-    int retval = CreateRteFlowBypassRule(items, p->dpdk_v.mbuf->port);
+    retval = RteFlowBypassRuleCreate(items, p->dpdk_v.mbuf->port);
 
-    RteFlowFreeBypassItems(items, 1, 2);
-
+    SCFree(p);
     return retval;
 }
 
+int RteFlowBypassCallback(Packet *p)
+{
+    if (p->flow == NULL) {
+        return 0;
+    }
+
+    Packet *p_cpy = SCMalloc(sizeof(Packet));
+    if (p_cpy == NULL) {
+        SCLogError("Memory allocation for rte_flow rule string failed");
+        return -1;
+    } 
+
+    memcpy(p_cpy, p, sizeof(Packet));
+    int retval = rte_ring_mp_enqueue(rte_bypass_ring, p_cpy);
+    return retval == 0 ? 1 : 0;
+}
+
+int RteFlowUpdateFlow(Flow *f, Packet *p, void *data)
+{
+    // BypassedIfaceList *ifl = (BypassedIfaceList *)FlowGetStorageById(f, g_flow_storage_id);
+    // if (ifl == NULL) {
+    //     ifl = SCCalloc(1, sizeof(*ifl));
+    //     if (ifl == NULL) {
+    //         return 0;
+    //     }
+    //     ifl->dev = p->livedev;
+    //     FlowSetStorageById(f, g_flow_storage_id, ifl);
+    //     return 1;
+    // }
+    // /* Look for packet iface in the list */
+    // BypassedIfaceList *ldev = ifl;
+    // while (ldev) {
+    //     if (p->livedev == ldev->dev) {
+    //         return 1;
+    //     }
+    //     ldev = ldev->next;
+    // }
+    // /* Call bypass function if ever not in the list */
+    // p->BypassPacketsFlow(p);
+
+    // /* Add iface to the list */
+    // BypassedIfaceList *nifl = SCCalloc(1, sizeof(*nifl));
+    // if (nifl == NULL) {
+    //     return 0;
+    // }
+    // nifl->dev = p->livedev;
+    // nifl->next = ifl;
+    // FlowSetStorageById(f, g_flow_storage_id, nifl);
+    return 1;
+}
+int RteFlowCheckBypassedFlowCreate(ThreadVars *th_v, struct timespec *curtime, void *data)
+{
+    // LiveDevice *ldev = NULL, *ndev;
+    // struct ebpf_timeout_config *cfg = (struct ebpf_timeout_config *)data;
+    // while(LiveDeviceForEach(&ldev, &ndev)) {
+    //     EBPFForEachFlowV4Table(th_v, ldev, "flow_table_v4",
+    //             curtime,
+    //             cfg, EBPFCreateFlowForKey);
+    //     EBPFForEachFlowV6Table(th_v, ldev, "flow_table_v6",
+    //             curtime,
+    //             cfg, EBPFCreateFlowForKey);
+    // }
+
+    return 0;
+}
 #endif /* HAVE_DPDK */
 /**
  * @}
