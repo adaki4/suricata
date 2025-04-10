@@ -1346,11 +1346,12 @@ static void PortConfSetInterruptMode(const DPDKIfaceConfig *iconf, struct rte_et
         port_conf->intr_conf.rxq = 1;
 }
 
-static void PortConfSetRteDynamicBypass(const DPDKIfaceConfig *iconf,  const struct rte_eth_dev_info *dev_info) {
+static int PortConfSetRteDynamicBypass(const DPDKIfaceConfig *iconf,  const struct rte_eth_dev_info *dev_info) {
     const char *driver_name = dev_info->driver_name;
     if ((strcmp(driver_name, "net_ice") == 0) || strcmp(driver_name, "mlx5_pci") == 0) {
-        RteBypassInit(iconf->iface);
+        return RteBypassInit(iconf->iface, iconf->port_id);
     }
+    return 0;
 }
 
 static void PortConfSetRSSConf(const DPDKIfaceConfig *iconf,
@@ -1442,7 +1443,7 @@ static void DeviceInitPortConf(const DPDKIfaceConfig *iconf,
 
     PortConfSetInterruptMode(iconf, port_conf);
 
-    // if possible, configure dynamic bypass with rte_flow
+    // if possible, configure dynamic bypass with rte_flow -> can return error, ASK ABOUT THIS
     PortConfSetRteDynamicBypass(iconf, dev_info);
 
     // configure RX offloads

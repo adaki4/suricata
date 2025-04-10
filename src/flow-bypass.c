@@ -32,7 +32,11 @@
 
 #ifdef CAPTURE_OFFLOAD_MANAGER
 
+#ifdef HAVE_DPDK
+#define FLOW_BYPASS_DELAY       1
+#else
 #define FLOW_BYPASS_DELAY       10
+#endif
 
 #ifndef TIMEVAL_TO_TIMESPEC
 #define TIMEVAL_TO_TIMESPEC(tv, ts) {                               \
@@ -123,9 +127,6 @@ static TmEcode BypassedFlowManager(ThreadVars *th_v, void *thread_data)
                 StatsSyncCounters(th_v);
                 return TM_ECODE_OK;
             }
-#ifdef HAVE_DPDK
-            RteFlowBypassRuleLoad();
-#endif
             StatsSyncCountersIfSignalled(th_v);
             SleepMsec(10);
         }
