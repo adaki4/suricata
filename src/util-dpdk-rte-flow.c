@@ -50,6 +50,8 @@
 #define COUNT_ACTION_ID                      128
 #define RTE_BYPASS_RING_SIZE                 1024
 #define RTE_BYPASS_RING_NAME                 "rte_bypass_ring"
+#define RTE_FLOW_TIMEOUT                     10
+#define INITIAL_RTE_FLOW_HANDLER_TABLE_SIZE  20
 
 static int RteFlowRuleStorageInit(RteFlowRuleStorage *);
 static int RteFlowRuleStorageAddRule(RteFlowRuleStorage *, const char *);
@@ -58,7 +60,10 @@ static char *DriverSpecificErrorMessage(const char *, struct rte_flow_item *);
 static bool RteFlowRulesContainPatternWildcard(char **, uint32_t);
 static bool RteFlowDropFilterInit(uint32_t, char **, struct rte_flow_attr *,
         struct rte_flow_action *, uint32_t *, const char *, const char *);
-static int RteFlowBypassRuleCreate(struct rte_flow_item *items, int port_id);
+static int RteFlowBypassRuleCreate(struct rte_flow_item *, int, struct rte_flow **);
+static void RteFlowHandlerTableInit(RteFlowHandlerTable *);
+static int RteFlowHandlerTableAddEntry(RteFlowHandlerTable *, struct rte_flow *, Flow *);
+static int RteFlowHandlerTableExtendCapacity(RteFlowHandlerTable *);
 
 struct rte_ring *rte_bypass_ring;
 
@@ -404,6 +409,104 @@ int RteFlowRulesCreate(
     SCReturnInt(0);
 }
 
+
+static void RteFlowHandlerTableInit(RteFlowHandlerTable *flow_handler_table) {
+    flow_handler_table->size = INITIAL_RTE_FLOW_HANDLER_TABLE_SIZE;
+    flow_handler_table->cnt = 0;
+    flow_handler_table->flows = SCCalloc(flow_handler_table->size, sizeof(struct Flow *));
+    flow_handler_table->handlers = SCCalloc(flow_handler_table->size, sizeof(struct rte_flow *));
+}
+
+ static int RteFlowHandlerTableAddEntry(RteFlowHandlerTable *flow_handler_table, struct rte_flow *handler, Flow *flow)
+ {
+    SCEnter();
+    flow_handler_table->handlers[flow_handler_table->cnt] = handler;
+    flow_handler_table->flows[flow_handler_table->cnt] = flow;
+
+    flow_handler_table->cnt++;
+    if (flow_handler_table->cnt == flow_handler_table->size) {
+        int retval = RteFlowHandlerTableExtendCapacity(flow_handler_table);
+        if (retval != 0) {
+            SCReturnInt(retval);
+        }
+    }
+    SCReturnInt(0);
+}
+
+static int RteFlowHandlerTableExtendCapacity(RteFlowHandlerTable *flow_handler_table)
+{
+    SCEnter();
+
+    flow_handler_table->size = 2 * flow_handler_table->size;
+    struct rte_flow **tmp_handlers = SCRealloc(flow_handler_table->handlers, flow_handler_table->size * sizeof(struct rte_flow *));
+
+    if (tmp_handlers == NULL) {
+        SCLogError("Memory reallocation for more handlers in RteFlowHandlerTable failed");
+        RteFlowHandlerTableFree(flow_handler_table);
+        SCReturnInt(-1);
+    }
+    flow_handler_table->handlers = tmp_handlers;
+
+    Flow **tmp_flows = SCRealloc(flow_handler_table->flows, flow_handler_table->size * sizeof(Flow *));
+    if (tmp_flows == NULL) {
+        SCLogError("Memory reallocation for more flows in RteFlowHandlerTable failed");
+        RteFlowHandlerTableFree(flow_handler_table);
+        SCReturnInt(-1);
+    }
+    flow_handler_table->flows = tmp_flows;
+
+    SCReturnInt(0);
+}
+
+/**
+ * \brief Deallocation of memory containing flow
+ *
+ * \param rule_storage rules loaded from suricata.yaml
+ */
+void RteFlowHandlerTableFree(RteFlowHandlerTable *flow_handler_table)
+{
+
+    if (!(flow_handler_table->handlers == NULL)) {
+        SCFree(flow_handler_table->handlers);
+        flow_handler_table->handlers = NULL;
+    }
+
+    if (!(flow_handler_table->flows == NULL)) {
+        SCFree(flow_handler_table->flows);
+        flow_handler_table->flows = NULL;
+    }
+
+    SCFree(flow_handler_table);
+    flow_handler_table = NULL;
+}
+
+static int RteFlowHandlerTableRemoveEntry(RteFlowHandlerTable *flow_handler_table, uint16_t port_id, uint16_t index)
+{
+    struct rte_flow *handler = flow_handler_table->handlers[index];
+    struct rte_flow_error flow_error = { 0 };
+    Flow *flow = flow_handler_table->flows[index];
+    
+    int retval = rte_flow_destroy(port_id, handler, &flow_error);
+    if (retval != 0) {
+        SCLogError("rte_flow dynamic bypass: destroy rte_flow rule error %s errmsg: %s",
+                rte_strerror(-retval), flow_error.message);
+        SCReturnInt(retval);
+    }
+
+    FLOWLOCK_WRLOCK(flow);
+    FlowUpdateState(flow, FLOW_STATE_ESTABLISHED);
+    FLOWLOCK_UNLOCK(flow);
+
+    flow_handler_table->handlers[index] = NULL;
+    flow_handler_table->flows[index] = NULL;
+    SCReturn(0);
+}
+
+int RteBypassInitPlaceholder(ThreadVars *th_v, struct timespec *curtime, void *data)
+{
+    return 0;
+}
+
 /**
  * \brief Enable and register functions for BypassManager, 
  *        initialize rte_ring data structure and store in global 
@@ -411,30 +514,37 @@ int RteFlowRulesCreate(
  * 
  * \param port_name 
  */
-
-void RteBypassInit(const char *port_name) {
+int RteBypassInit(const char *port_name, int port_id) {
+    RteFlowHandlerTable *flow_handler_table = SCCalloc(1, sizeof(RteFlowHandlerTable *));
+    if (flow_handler_table == NULL) {
+        SCReturnInt(-1);
+    }
+    RteFlowHandlerTableInit(flow_handler_table);
     RunModeEnablesBypassManager();
-    BypassedFlowManagerRegisterCheckFunc(NULL, RteFlowCheckBypassedFlowCreate, NULL);
-    BypassedFlowManagerRegisterUpdateFunc(RteFlowUpdateFlow, NULL);
-    // Possibly change SOCKET_ID_ANY to Numa id
+    //BypassedFlowManagerRegisterCheckFunc(NULL, RteFlowCheckBypassedFlowCreate, NULL);
+    BypassedFlowManagerRegisterCheckFunc(RteFlowCheckFlow, RteBypassInitPlaceholder, (void*)flow_handler_table);
+    BypassedFlowManagerRegisterCheckFunc(RteFlowBypassRuleLoad, NULL, (void*)flow_handler_table);
+    // Possibly change SOCKET_ID_ANY to Numa id -> set to initialization socket id
     rte_bypass_ring = rte_ring_create(RTE_BYPASS_RING_NAME, RTE_BYPASS_RING_SIZE, SOCKET_ID_ANY, RING_F_SC_DEQ);
     if (rte_bypass_ring == NULL) {
         SCLogError("%s: rte_ring_create failed with code %d (ring: %s): %s",
                 port_name, rte_errno, RTE_BYPASS_RING_NAME, rte_strerror(rte_errno));
     }
+    SCReturnInt(0);
 }
 
-static int RteFlowBypassRuleCreate(struct rte_flow_item *items, int port_id)
+static int RteFlowBypassRuleCreate(struct rte_flow_item *items, int port_id, struct rte_flow **flow_handler)
 {
     struct rte_flow_error flow_error = { 0 };
     struct rte_flow_attr attr = { 0 };
-    struct rte_flow_action action[] = { { 0 }, { 0 } };
+    struct rte_flow_action action[] = { { 0 }, { 0 }, { 0 } };
 
     attr.ingress = 1;
     attr.priority = 0;
 
-    action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
-    action[1].type = RTE_FLOW_ACTION_TYPE_END;
+    action[0].type = RTE_FLOW_ACTION_TYPE_COUNT;
+    action[1].type = RTE_FLOW_ACTION_TYPE_DROP;
+    action[2].type = RTE_FLOW_ACTION_TYPE_END;
 
     int retval = rte_flow_validate(port_id, &attr, items, action, &flow_error);
     if (retval != 0) {
@@ -443,7 +553,7 @@ static int RteFlowBypassRuleCreate(struct rte_flow_item *items, int port_id)
         return retval;
     }
 
-    struct rte_flow *flow_handler = rte_flow_create(port_id, &attr, items, action, &flow_error);
+    *flow_handler = rte_flow_create(port_id, &attr, items, action, &flow_error);
     if (flow_handler == NULL) {
         SCLogError("rte_flow bypass rule creation error: %s", flow_error.message);
         return -1;
@@ -452,22 +562,36 @@ static int RteFlowBypassRuleCreate(struct rte_flow_item *items, int port_id)
     return 0;
 }
 
-int RteFlowBypassRuleLoad()
+/**
+ * \brief Poll flow data from rte_flow_ring structure and create rte_flow bypass rule to bypass flow from both directions 
+ * 
+ * \param th_v Ignored
+ * \param bypassstats Ignored
+ * \param curtime Ignored
+ * \param data Ignored
+ * \return int 
+ */
+int RteFlowBypassRuleLoad(ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data)
 {
-    void *data = NULL;
 
-    int retval = rte_ring_dequeue(rte_bypass_ring, &data);
+    RteFlowHandlerTable *flow_handler_table = (RteFlowHandlerTable *)data;
+
+    void *ring_data = NULL;
+    int retval = rte_ring_dequeue(rte_bypass_ring, &ring_data);
     if (retval != 0) {
         return -ENOENT;
     }
 
-    Packet *p = (Packet *)data;
+    Packet *p = (Packet *)ring_data;
 
     /* Only bypass TCP and UDP */
     if (!(PacketIsTCP(p) || PacketIsUDP(p))) {
         return 0;
     }
 
+    // add VLAN item from packet
+
+    // add opposite direction rule 
     struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 } };
     struct rte_flow_item_ipv4 ipv4_spec = { 0 }, ipv4_mask = { 0 };
     struct rte_flow_item_ipv6 ipv6_spec = { 0 }, ipv6_mask = { 0 };
@@ -526,8 +650,16 @@ int RteFlowBypassRuleLoad()
     items[2].mask = l4_mask;
     items[3].type = RTE_FLOW_ITEM_TYPE_END;
 
-    retval = RteFlowBypassRuleCreate(items, p->dpdk_v.mbuf->port);
 
+    struct rte_flow *rule_handler = NULL;
+    retval = RteFlowBypassRuleCreate(items, p->dpdk_v.mbuf->port, &rule_handler);
+
+    if (!retval) {
+        FLOWLOCK_WRLOCK(p->flow);
+        FlowUpdateState(p->flow, FLOW_STATE_LOCAL_BYPASSED);
+        FLOWLOCK_UNLOCK(p->flow);
+    }
+    RteFlowHandlerTableAddEntry(flow_handler_table, rule_handler, p->flow);
     SCFree(p);
     return retval;
 }
@@ -537,11 +669,11 @@ int RteFlowBypassCallback(Packet *p)
     if (p->flow == NULL) {
         return 0;
     }
-
+    // rte_flow_mempool instead of Malloc
     Packet *p_cpy = SCMalloc(sizeof(Packet));
     if (p_cpy == NULL) {
         SCLogError("Memory allocation for rte_flow rule string failed");
-        return -1;
+        SCReturnInt(-1);
     } 
 
     memcpy(p_cpy, p, sizeof(Packet));
@@ -549,55 +681,90 @@ int RteFlowBypassCallback(Packet *p)
     return retval == 0 ? 1 : 0;
 }
 
-int RteFlowUpdateFlow(Flow *f, Packet *p, void *data)
-{
-    // BypassedIfaceList *ifl = (BypassedIfaceList *)FlowGetStorageById(f, g_flow_storage_id);
-    // if (ifl == NULL) {
-    //     ifl = SCCalloc(1, sizeof(*ifl));
-    //     if (ifl == NULL) {
-    //         return 0;
-    //     }
-    //     ifl->dev = p->livedev;
-    //     FlowSetStorageById(f, g_flow_storage_id, ifl);
-    //     return 1;
-    // }
-    // /* Look for packet iface in the list */
-    // BypassedIfaceList *ldev = ifl;
-    // while (ldev) {
-    //     if (p->livedev == ldev->dev) {
-    //         return 1;
-    //     }
-    //     ldev = ldev->next;
-    // }
-    // /* Call bypass function if ever not in the list */
-    // p->BypassPacketsFlow(p);
+// static int RteFlowHandlerTableFindHandler(RteFlowHandlerTable *flow_handler_table, Flow *flow, struct rte_flow **handler) {
+//     int i = 0;
+//     while (i != flow_handler_table->cnt) {
+//         if (flow_handler_table->flows[i] == flow) {
+//             *handler = flow_handler_table->handlers[i];
+//             SCReturnBool(true);
+//         }
+//         i++;
+//     }
+//     SCReturnBool(false);
+// }
 
-    // /* Add iface to the list */
-    // BypassedIfaceList *nifl = SCCalloc(1, sizeof(*nifl));
-    // if (nifl == NULL) {
-    //     return 0;
-    // }
-    // nifl->dev = p->livedev;
-    // nifl->next = ifl;
-    // FlowSetStorageById(f, g_flow_storage_id, nifl);
+static int RteFlowShouldRemoveRteRule(struct flows_stats *bypassstats, uint16_t port_id, struct rte_flow *rule_handler) {
+    struct rte_flow_query_count query_count = { 0 };
+    struct rte_flow_action action[] = { { 0 }, { 0 }, { 0 } };
+    struct rte_flow_error flow_error = { 0 };
+    uint32_t counter_id = COUNT_ACTION_ID;
+    int retval = 0;
+
+    query_count.reset = 0;
+    action[0].type = RTE_FLOW_ACTION_TYPE_COUNT;
+    action[0].conf = &counter_id;
+    action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+    //temp port id
+    retval = rte_flow_query(0, rule_handler, &(action[0]), (void *)&query_count, &flow_error);
+        if (retval != 0) {
+        SCLogError("rte_flow dynamic bypass: count query error %s errmsg: %s",
+                rte_strerror(-retval), flow_error.message);
+        SCReturnInt(retval);
+    };
+    SCLogInfo("Success bypass query");
+    if (bypassstats->packets < query_count.hits) {
+        bypassstats->packets = query_count.hits;
+        bypassstats->bytes = query_count.bytes;
+        SCReturnInt(0);
+    }
+
+    SCReturnInt(1);
+}
+
+int RteFlowCheckFlow(ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data)
+{   
+    RteFlowHandlerTable *flow_handler_table = (RteFlowHandlerTable *)data;
+    uint16_t port_id = 0, i = 0;
+    int destroy_flow = false;
+    
+    //iterate through flow-handler table
+    while (i != flow_handler_table->cnt) {
+        //find inactive flows -> flow packets vs rte_query on handler packets
+        if (flow_handler_table->handlers[i] == NULL) {
+            continue;
+        }
+        destroy_flow = RteFlowShouldRemoveRteRule(bypassstats, port_id, flow_handler_table->handlers[i]);
+        if (destroy_flow < 0) {
+            SCReturnInt(destroy_flow);
+        }
+        if (destroy_flow == 1) {
+            //destroy inactive flow rules and remove inactive flows from flow table 
+            RteFlowHandlerTableRemoveEntry(flow_handler_table, port_id, i);
+        }
+        i++;
+    }
+
     return 1;
 }
-int RteFlowCheckBypassedFlowCreate(ThreadVars *th_v, struct timespec *curtime, void *data)
-{
-    // LiveDevice *ldev = NULL, *ndev;
-    // struct ebpf_timeout_config *cfg = (struct ebpf_timeout_config *)data;
-    // while(LiveDeviceForEach(&ldev, &ndev)) {
-    //     EBPFForEachFlowV4Table(th_v, ldev, "flow_table_v4",
-    //             curtime,
-    //             cfg, EBPFCreateFlowForKey);
-    //     EBPFForEachFlowV6Table(th_v, ldev, "flow_table_v6",
-    //             curtime,
-    //             cfg, EBPFCreateFlowForKey);
-    // }
+// int RteFlowCheckBypassedFlowCreate(ThreadVars *th_v, struct timespec *curtime, void *data)
+// {
+//     // LiveDevice *ldev = NULL, *ndev;
+//     // struct ebpf_timeout_config *cfg = (struct ebpf_timeout_config *)data;
+//     // while(LiveDeviceForEach(&ldev, &ndev)) {
+//     //     EBPFForEachFlowV4Table(th_v, ldev, "flow_table_v4",
+//     //             curtime,
+//     //             cfg, EBPFCreateFlowForKey);
+//     //     EBPFForEachFlowV6Table(th_v, ldev, "flow_table_v6",
+//     //             curtime,
+//     //             cfg, EBPFCreateFlowForKey);
+//     // }
 
-    return 0;
-}
-#endif /* HAVE_DPDK */
+//     return 0;
+// }
+// #endif /* HAVE_DPDK */
 /**
  * @}
  */
+
+#endif /* HAVE_DPDK */
