@@ -40,11 +40,28 @@
 #include "flow-bypass.h"
 
 typedef struct RteFlowHandlerTable_ {
-    struct rte_flow **handlers;
+    // timespec to periodically check the table for changes
+    struct timespec *ts;
+    struct rte_flow **src_handlers;
+    struct rte_flow **dst_handlers;
     Flow **flows;
     uint16_t size;
     uint16_t cnt;
+    uint16_t ref_count;
 } RteFlowHandlerTable;
+
+typedef struct RteFlowBypassPacketData_ {
+    uint32_t ipv4_src;
+    uint32_t ipv4_dst;
+    uint8_t ipv6_src[16];
+    uint8_t ipv6_dst[16];
+    uint8_t proto;
+    uint16_t sp;
+    uint16_t dp;
+    Flow *flow;
+    uint16_t port_id;
+    bool is_ipv4;
+} RteFlowBypassPacketData;
 
 void RteFlowRuleStorageFree(RteFlowRuleStorage *rte_flow_rule_storage);
 int ConfigLoadRteFlowRules(
@@ -55,13 +72,12 @@ uint64_t RteFlowFilteredPacketsQuery(struct rte_flow **rte_flow_rules, uint16_t 
         char *device_name, int port_id, uint64_t *filtered_packets);
 int RteBypassInit(const char *port_name, int port_id);
 int RteFlowBypassCallback(Packet *);
-//int RteFlowCheckBypassedFlowCreate(ThreadVars *th_v, struct timespec *curtime, void *data);
-int RteBypassInitPlaceholder(ThreadVars *th_v, struct timespec *curtime, void *data);
-int RteFlowCheckFlow(ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
-int RteFlowBypassRuleLoad(ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
-void RteFlowHandlerTableFree(RteFlowHandlerTable *flow_handler_table);
-
-
+int RteFlowBypassCheckFlowInit(ThreadVars *th_v, struct timespec *curtime, void *data);
+int RteFlowCheckFlow(
+        ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
+int RteFlowBypassRuleLoad(
+        ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
+void RteFlowHandlerTableFree(void *data);
 
 #endif /* HAVE_DPDK */
 #endif /* SURICATA_RTE_FLOW_RULES_H */
