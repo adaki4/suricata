@@ -1346,7 +1346,9 @@ static void PortConfSetInterruptMode(const DPDKIfaceConfig *iconf, struct rte_et
         port_conf->intr_conf.rxq = 1;
 }
 
-static int PortConfSetRteDynamicBypass(const DPDKIfaceConfig *iconf,  const struct rte_eth_dev_info *dev_info) {
+static int PortConfSetRteDynamicBypass(
+        const DPDKIfaceConfig *iconf, const struct rte_eth_dev_info *dev_info)
+{
     const char *driver_name = dev_info->driver_name;
     if ((strcmp(driver_name, "net_ice") == 0) || strcmp(driver_name, "mlx5_pci") == 0) {
         return RteBypassInit(iconf->iface, iconf->port_id);
@@ -1469,7 +1471,7 @@ static int DeviceConfigureQueues(DPDKIfaceConfig *iconf, const struct rte_eth_de
     if (retval < 0) {
         goto cleanup;
     }
-
+    iconf->pkt_mempools->port_id = iconf->port_id;
     // +4 for VLAN header
     uint16_t mtu_size = iconf->mtu + RTE_ETHER_CRC_LEN + RTE_ETHER_HDR_LEN + 4;
     uint16_t mbuf_size = ROUNDUP(mtu_size, 1024) + RTE_PKTMBUF_HEADROOM;

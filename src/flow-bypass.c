@@ -33,10 +33,10 @@
 #ifdef CAPTURE_OFFLOAD_MANAGER
 
 #ifdef HAVE_DPDK
-#define FLOW_BYPASS_DELAY       10
+#define FLOW_BYPASS_DELAY 0.1f
 #else
 #define FLOW_BYPASS_DELAY       10
-#endif
+#endif /* HAVE_DPDK */
 
 #ifndef TIMEVAL_TO_TIMESPEC
 #define TIMEVAL_TO_TIMESPEC(tv, ts) {                               \
@@ -119,11 +119,25 @@ static TmEcode BypassedFlowManager(ThreadVars *th_v, void *thread_data)
         }
 
         if (TmThreadsCheckFlag(th_v, THV_KILL)) {
+#ifdef HAVE_DPDK
+            for (i = 0; i < g_bypassed_func_max_index; i++) {
+                if (bypassedfunclist[i].Func == NULL)
+                    continue;
+                RteFlowHandlerTableFree(bypassedfunclist[i].data);
+            }
+#endif
             StatsSyncCounters(th_v);
             return TM_ECODE_OK;
         }
         for (i = 0; i < FLOW_BYPASS_DELAY * 100; i++) {
             if (TmThreadsCheckFlag(th_v, THV_KILL)) {
+#ifdef HAVE_DPDK
+                for (i = 0; i < g_bypassed_func_max_index; i++) {
+                    if (bypassedfunclist[i].Func == NULL)
+                        continue;
+                    RteFlowHandlerTableFree(bypassedfunclist[i].data);
+                }
+#endif
                 StatsSyncCounters(th_v);
                 return TM_ECODE_OK;
             }
