@@ -141,10 +141,12 @@ static TmEcode BypassedFlowManager(ThreadVars *th_v, void *thread_data)
                 StatsSyncCounters(th_v);
                 return TM_ECODE_OK;
             }
+
             StatsSyncCountersIfSignalled(th_v);
             SleepMsec(10);
         }
     }
+    // call the deinit function
     return TM_ECODE_OK;
 }
 
