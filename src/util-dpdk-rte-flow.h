@@ -51,6 +51,7 @@ typedef struct RteFlowHandlerTable_ {
 } RteFlowHandlerTable;
 
 typedef struct RteFlowBypassPacketData_ {
+    /* 2 Unions -> src and dst IP addresses */
     uint32_t ipv4_src;
     uint32_t ipv4_dst;
     uint8_t ipv6_src[16];
