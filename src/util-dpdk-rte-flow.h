@@ -38,30 +38,27 @@
 #include "conf.h"
 #include "util-dpdk.h"
 #include "flow-bypass.h"
+#include "flow-hash.h"
+
+typedef struct RteFlowHandlerToFlow_ {
+        struct rte_flow *src_handler;
+        struct rte_flow *dst_handler;
+        uint32_t flow_hash;
+        FlowKey flow_key;
+    } RteFlowHandlerToFlow;
 
 typedef struct RteFlowHandlerTable_ {
     // timespec to periodically check the table for changes
     struct timespec *ts;
-    struct rte_flow **src_handlers;
-    struct rte_flow **dst_handlers;
-    Flow **flows;
+    RteFlowHandlerToFlow *handler_to_flow;
     uint16_t size;
     uint16_t cnt;
     uint16_t ref_count;
 } RteFlowHandlerTable;
 
 typedef struct RteFlowBypassPacketData_ {
-    /* 2 Unions -> src and dst IP addresses */
-    uint32_t ipv4_src;
-    uint32_t ipv4_dst;
-    uint8_t ipv6_src[16];
-    uint8_t ipv6_dst[16];
-    uint8_t proto;
-    uint16_t sp;
-    uint16_t dp;
-    Flow *flow;
+    FlowKey *flow_key;
     uint16_t port_id;
-    bool is_ipv4;
 } RteFlowBypassPacketData;
 
 void RteFlowRuleStorageFree(RteFlowRuleStorage *rte_flow_rule_storage);

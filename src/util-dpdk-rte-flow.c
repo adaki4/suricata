@@ -32,6 +32,7 @@
 
 #include "decode.h"
 #include "flow-bypass.h"
+#include "flow-hash.h"
 #include "runmode-dpdk.h"
 #include "util-debug.h"
 #include "util-dpdk.h"
@@ -64,7 +65,7 @@ static bool RteFlowDropFilterInit(uint32_t, char **, struct rte_flow_attr *,
 static int RteFlowBypassRuleCreate(struct rte_flow_item *, int, struct rte_flow **);
 static int RteFlowHandlerTableInit(RteFlowHandlerTable **);
 static int RteFlowHandlerTableAddEntry(
-        RteFlowHandlerTable *, struct rte_flow *, struct rte_flow *, Flow *);
+        RteFlowHandlerTable *, struct rte_flow *, struct rte_flow *, FlowKey *, uint32_t);
 static int RteFlowHandlerTableExtendCapacity(RteFlowHandlerTable *);
 static int RteFlowHandlerTableShouldRemoveRteRule(
         struct flows_stats *,  struct timespec *, uint16_t, struct rte_flow *, struct rte_flow *, Flow *);
@@ -444,7 +445,7 @@ int RteBypassInit(const char *port_name, int port_id)
         SCReturnInt(-1);
     }
     rte_bypass_mempool = rte_mempool_create(RTE_BYPASS_MEMPOOL_NAME, (RTE_BYPASS_RING_SIZE * 2) - 1,
-            sizeof(RteFlowBypassPacketData), 0, 0, NULL, NULL, NULL, NULL, SOCKET_ID_ANY,
+            sizeof(FlowKey), 0, 0, NULL, NULL, NULL, NULL, SOCKET_ID_ANY,
             RTE_MEMPOOL_F_NO_SPREAD);
     if (rte_bypass_ring == NULL) {
         SCLogError("%s: rte_mempool_create failed with code %d (mempool: %s): %s", port_name,
@@ -463,30 +464,31 @@ static int RteFlowHandlerTableInit(RteFlowHandlerTable **flow_handler_table_out)
 {
     RteFlowHandlerTable *flow_handler_table = SCCalloc(1, sizeof(RteFlowHandlerTable));
     if (flow_handler_table == NULL) {
+        SCLogError("Memory allocation for RteFlowHandlerTable failed");
         SCReturnInt(-1);
     }
     flow_handler_table->size = INITIAL_RTE_FLOW_HANDLER_TABLE_SIZE;
     flow_handler_table->cnt = 0;
-    flow_handler_table->flows = SCCalloc(flow_handler_table->size, sizeof(struct Flow *));
-    if (flow_handler_table->flows == NULL) {
+    flow_handler_table->handler_to_flow = SCCalloc(
+            flow_handler_table->size, sizeof(RteFlowHandlerToFlow));
+    if (flow_handler_table->handler_to_flow == NULL) {
+        SCLogError("Memory allocation for RteFlowHandlerToFlow failed");
+        RteFlowHandlerTableFree((void **)&flow_handler_table);
         SCReturnInt(-1);
     }
-    flow_handler_table->src_handlers =
-            SCCalloc(flow_handler_table->size, sizeof(struct rte_flow *));
-    if (flow_handler_table->src_handlers == NULL) {
-        SCReturnInt(-1);
-    }
-    flow_handler_table->dst_handlers =
-            SCCalloc(flow_handler_table->size, sizeof(struct rte_flow *));
-    if (flow_handler_table->dst_handlers == NULL) {
-        SCReturnInt(-1);
-    }
-    flow_handler_table->ts = SCCalloc(flow_handler_table->size, sizeof(struct timespec));
+    flow_handler_table->ts = SCCalloc(1, sizeof(struct timespec));
     if (flow_handler_table->ts == NULL) {
+        SCLogError("Memory allocation for timespec failed");
+        RteFlowHandlerTableFree((void **)&flow_handler_table);
         SCReturnInt(-1);
     }
     *flow_handler_table_out = flow_handler_table;
     SCReturnInt(0);
+}
+
+static void CopyFlowKey(FlowKey *new_flow_key, FlowKey *flow_key)
+{
+    memcpy(new_flow_key, flow_key, sizeof(FlowKey));
 }
 
 /**
@@ -498,24 +500,24 @@ static int RteFlowHandlerTableInit(RteFlowHandlerTable **flow_handler_table_out)
  * \return int 0 on success, negative value on error
  */
 static int RteFlowHandlerTableAddEntry(RteFlowHandlerTable *flow_handler_table,
-        struct rte_flow *src_handler, struct rte_flow *dst_handler, Flow *flow)
+        struct rte_flow *src_handler, struct rte_flow *dst_handler, FlowKey *flow_key, uint32_t flow_hash)
 {
     uint16_t i = 0;
-    while (i < flow_handler_table->cnt) {
-        if (flow_handler_table->src_handlers[i] == NULL) {
-            flow_handler_table->src_handlers[i] = src_handler;
-            flow_handler_table->dst_handlers[i] = dst_handler;
-            flow_handler_table->flows[i] = flow;
+    while (i <= flow_handler_table->cnt) {
+        if (flow_handler_table->handler_to_flow[i].src_handler == NULL &&
+                flow_handler_table->handler_to_flow[i].dst_handler == NULL) {
+            flow_handler_table->handler_to_flow[i].src_handler = src_handler;
+            flow_handler_table->handler_to_flow[i].dst_handler = dst_handler;
+            flow_handler_table->handler_to_flow[i].flow_hash = flow_hash;
+            CopyFlowKey(&(flow_handler_table->handler_to_flow[i].flow_key), flow_key);
+            flow_handler_table->cnt++;
+            break;
+        }
+        if (i == flow_handler_table->cnt) {
+            flow_handler_table->cnt++;
             break;
         }
         i++;
-    }
-
-    if (i == flow_handler_table->cnt) {
-        flow_handler_table->src_handlers[flow_handler_table->cnt] = src_handler;
-        flow_handler_table->dst_handlers[flow_handler_table->cnt] = dst_handler;
-        flow_handler_table->flows[flow_handler_table->cnt] = flow;
-        flow_handler_table->cnt++;
     }
 
     if (flow_handler_table->cnt == flow_handler_table->size) {
@@ -537,44 +539,24 @@ static int RteFlowHandlerTableExtendCapacity(RteFlowHandlerTable *flow_handler_t
 {
     flow_handler_table->size = 2 * flow_handler_table->size;
 
-    struct rte_flow **tmp_handlers = SCRealloc(
-            flow_handler_table->src_handlers, flow_handler_table->size * sizeof(struct rte_flow *));
-    if (tmp_handlers == NULL) {
-        SCLogError("Memory reallocation for more rte_flow rule handlers in RteFlowHandlerTable "
+    RteFlowHandlerToFlow *tmp_ptr = SCRealloc(
+            flow_handler_table->handler_to_flow, flow_handler_table->size * sizeof(RteFlowHandlerToFlow));
+    if (tmp_ptr == NULL) {
+        SCLogError("Memory reallocation for more entries in RteFlowHandlerTable "
                    "failed");
         RteFlowHandlerTableFree((void **)&flow_handler_table);
         SCReturnInt(-1);
     }
-    flow_handler_table->src_handlers = tmp_handlers;
-
-    tmp_handlers = SCRealloc(
-            flow_handler_table->dst_handlers, flow_handler_table->size * sizeof(struct rte_flow *));
-    if (tmp_handlers == NULL) {
-        SCLogError("Memory reallocation for more rte_flow rule handlers in RteFlowHandlerTable "
-                   "failed");
-        RteFlowHandlerTableFree((void **)&flow_handler_table);
-        SCReturnInt(-1);
-    }
-    flow_handler_table->dst_handlers = tmp_handlers;
-
-    Flow **tmp_flows =
-            SCRealloc(flow_handler_table->flows, flow_handler_table->size * sizeof(Flow *));
-    if (tmp_flows == NULL) {
-        SCLogError("Memory reallocation for more flows in RteFlowHandlerTable failed");
-        RteFlowHandlerTableFree((void **)&flow_handler_table);
-        SCReturnInt(-1);
-    }
-    flow_handler_table->flows = tmp_flows;
+    flow_handler_table->handler_to_flow = tmp_ptr;
     SCReturnInt(0);
 }
 
 static int RteFlowHandlerTableRemoveEntry(
-        RteFlowHandlerTable *flow_handler_table, uint16_t port_id, uint16_t index)
+        RteFlowHandlerTable *flow_handler_table, uint16_t port_id, uint16_t index, Flow *flow)
 {
-    struct rte_flow *src_handler = flow_handler_table->src_handlers[index];
-    struct rte_flow *dst_handler = flow_handler_table->dst_handlers[index];
+    struct rte_flow *src_handler = flow_handler_table->handler_to_flow[index].src_handler;
+    struct rte_flow *dst_handler = flow_handler_table->handler_to_flow[index].dst_handler;
     struct rte_flow_error flow_error = { 0 };
-    Flow *flow = flow_handler_table->flows[index];
 
     int retval = rte_flow_destroy(port_id, src_handler, &flow_error);
     if (retval != 0) {
@@ -590,13 +572,12 @@ static int RteFlowHandlerTableRemoveEntry(
         SCReturnInt(retval);
     }
 
-    FLOWLOCK_WRLOCK(flow);
     FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
-    FLOWLOCK_UNLOCK(flow);
 
-    flow_handler_table->src_handlers[index] = NULL;
-    flow_handler_table->dst_handlers[index] = NULL;
-    flow_handler_table->flows[index] = NULL;
+    flow_handler_table->handler_to_flow[index].src_handler = NULL;
+    flow_handler_table->handler_to_flow[index].dst_handler = NULL;
+    flow_handler_table->handler_to_flow[index].flow_hash = 0;
+    memset(&flow_handler_table->handler_to_flow[index].flow_key, 0, sizeof(FlowKey));
     SCReturnInt(0);
 }
 
@@ -650,7 +631,6 @@ static int RteFlowHandlerTableShouldRemoveRteRule(struct flows_stats *bypassstat
     uint32_t dst_bytes = query_count.bytes;
 
     if (flow->tosrcpktcnt < src_packets || flow->todstpktcnt < dst_packets) {
-        FLOWLOCK_WRLOCK(flow);
         flow->lastts.secs = curtime->tv_sec;
         flow->lastts.usecs = curtime->tv_nsec / 1000;
         flow->tosrcpktcnt = src_packets;
@@ -659,7 +639,6 @@ static int RteFlowHandlerTableShouldRemoveRteRule(struct flows_stats *bypassstat
         flow->todstbytecnt = dst_bytes;
         bypassstats->packets += src_packets + dst_packets;
         bypassstats->bytes += src_bytes + dst_bytes;
-        FLOWLOCK_UNLOCK(flow);
         SCReturnInt(0);
     }
     SCLogInfo("Deleting rule");
@@ -679,20 +658,11 @@ void RteFlowHandlerTableFree(void *data)
     if (flow_handler_table->ref_count > 0) {
         SCReturn;
     }
-
-    if (flow_handler_table->src_handlers != NULL) {
-        SCFree(flow_handler_table->src_handlers);
-        flow_handler_table->src_handlers = NULL;
-    }
-
-    if (flow_handler_table->dst_handlers != NULL) {
-        SCFree(flow_handler_table->dst_handlers);
-        flow_handler_table->dst_handlers = NULL;
-    }
-
-    if (flow_handler_table->flows != NULL) {
-        SCFree(flow_handler_table->flows);
-        flow_handler_table->flows = NULL;
+    SCLogInfo("%d", flow_handler_table->cnt);
+    SCLogInfo("%d", flow_handler_table->size);
+    if (flow_handler_table->handler_to_flow != NULL) {
+        SCFree(flow_handler_table->handler_to_flow);
+        flow_handler_table->handler_to_flow = NULL;
     }
 
     if (flow_handler_table->ts != NULL) {
@@ -766,43 +736,53 @@ int RteFlowCheckFlow(
         ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data)
 {
     RteFlowHandlerTable *flow_handler_table = (RteFlowHandlerTable *)data;
-    uint16_t i = 0;
-    int destroy_flow = 0;
-    int tcount = 0;
+
 
     if (flow_handler_table->ts->tv_sec > curtime->tv_sec - RTE_FLOW_BYPASS_TIMEOUT ||
             flow_handler_table->cnt == 0) {
-        SCReturnInt(tcount);
+        SCReturnInt(0);
     }
 
     flow_handler_table->ts->tv_sec = curtime->tv_sec;
     flow_handler_table->ts->tv_nsec = curtime->tv_nsec;
 
+    Flow *flow = NULL;
     // DEBUG VAR
     int var = 0;
     // iterate through flow-handler table
+    uint16_t i = 0;
+    int destroy_flow = 0;
+    int tcount = 0;
     while (i != flow_handler_table->cnt) {
-        SCLogInfo("count: %d", flow_handler_table->cnt);
+        SCLogInfo("count: %d,  curr %d", flow_handler_table->cnt, i);
         // find inactive flows -> flow packets vs rte_query on handler packets
-        if (flow_handler_table->src_handlers[i] != NULL) {
+        if (flow_handler_table->handler_to_flow[i].src_handler != NULL &&
+                flow_handler_table->handler_to_flow[i].dst_handler != NULL) {
             var++;
-            destroy_flow = RteFlowHandlerTableShouldRemoveRteRule(bypassstats, curtime,
-                    flow_handler_table->flows[i]->livedev->dpdk_vars->port_id,
-                    flow_handler_table->src_handlers[i], flow_handler_table->dst_handlers[i],
-                    flow_handler_table->flows[i]);
-            if (destroy_flow < 0) {
-                SCReturnInt(destroy_flow);
-            }
-            if (destroy_flow == 1) {
-                // destroy inactive flow rules and remove inactive flows from flow table
-                RteFlowHandlerTableRemoveEntry(flow_handler_table,
-                        flow_handler_table->flows[i]->livedev->dpdk_vars->port_id, i);
-                tcount++;
+            flow = FlowGetExistingFlowFromHash(
+                    &(flow_handler_table->handler_to_flow[i].flow_key),
+                    flow_handler_table->handler_to_flow[i].flow_hash);
+            if (flow != NULL) {
+                SCLogInfo("flow found");
+                destroy_flow = RteFlowHandlerTableShouldRemoveRteRule(bypassstats, curtime,
+                        flow->livedev->dpdk_vars->port_id,
+                        flow_handler_table->handler_to_flow[i].src_handler, flow_handler_table->handler_to_flow[i].dst_handler,
+                        flow);
+                if (destroy_flow < 0) {
+                    SCReturnInt(destroy_flow);
+                }
+                if (destroy_flow == 1) {
+                    // destroy inactive flow rules and remove inactive flows from flow table
+                    RteFlowHandlerTableRemoveEntry(flow_handler_table,
+                        flow->livedev->dpdk_vars->port_id, i, flow);
+                    tcount++;
+                }
+                FLOWLOCK_UNLOCK(flow);
             }
         }
         i++;
     }
-    SCLogInfo("%d count of rules", var);
+    SCLogInfo("%d count of rules", var - tcount);
     SCReturnInt(tcount);
 }
 
@@ -840,16 +820,23 @@ int RteFlowBypassRuleLoad(
             SCReturnInt(i);
         }
 
-        RteFlowBypassPacketData *p = (RteFlowBypassPacketData *)ring_data;
-
+        FlowKey *flow_key = (FlowKey *)ring_data;
+        uint32_t flow_hash = FlowKeyGetHash(flow_key);
+        Flow *flow = FlowGetExistingFlowFromHash(flow_key, flow_hash);
+        if (flow == NULL) {
+            SCLogError("Flow not found");
+            continue;
+        }
+        
+        uint16_t port_id = flow->livedev->dpdk_vars->port_id;
         // add VLAN item from packet
 
         /* Create rte_flow rule for original direction */
-        if (p->is_ipv4) {
+        if (FLOW_IS_IPV4(flow)) {
             SCLogDebug("Add an IPv4 rte_flow bypass rule");
-            ipv4_spec.hdr.src_addr = p->ipv4_src;
+            ipv4_spec.hdr.src_addr = flow->src.address.address_un_data32[0];
             ipv4_mask.hdr.src_addr = 0xFFFFFFFF;
-            ipv4_spec.hdr.dst_addr = p->ipv4_dst;
+            ipv4_spec.hdr.dst_addr = flow->dst.address.address_un_data32[0];
             ipv4_mask.hdr.dst_addr = 0xFFFFFFFF;
             ip_spec = &ipv4_spec;
             ip_mask = &ipv4_mask;
@@ -858,9 +845,9 @@ int RteFlowBypassRuleLoad(
         } else {
             SCLogDebug("Add an IPv6 rte_flow bypass rule");
             for (uint8_t i = 0; i < 16; i++) {
-                ipv6_spec.hdr.src_addr[i] = (p->ipv6_src[i / 4]) >> (8 * (i % 4));
+                ipv6_spec.hdr.src_addr[i] = flow->src.address.address_un_data8[i];
                 ipv6_mask.hdr.src_addr[i] = 0xFF;
-                ipv6_spec.hdr.dst_addr[i] = (p->ipv6_dst[i / 4]) >> (8 * (i % 4));
+                ipv6_spec.hdr.dst_addr[i] = flow->dst.address.address_un_data8[i];
                 ipv6_mask.hdr.dst_addr[i] = 0xFF;
             }
 
@@ -869,20 +856,20 @@ int RteFlowBypassRuleLoad(
             items[1].type = RTE_FLOW_ITEM_TYPE_IPV6;
         }
 
-        if (p->proto == IPPROTO_TCP) {
-            tcp_spec.hdr.src_port = htons(p->sp);
+        if (flow->proto == IPPROTO_TCP) {
+            tcp_spec.hdr.src_port = htons(flow->sp);
             tcp_mask.hdr.src_port = 0xFFFF;
-            tcp_spec.hdr.dst_port = htons(p->dp);
+            tcp_spec.hdr.dst_port = htons(flow->dp);
             tcp_mask.hdr.dst_port = 0xFFFF;
             l4_spec = &tcp_spec;
             l4_mask = &tcp_mask;
             items[2].type = RTE_FLOW_ITEM_TYPE_TCP;
 
-        } else if (p->proto == IPPROTO_UDP) {
-            udp_spec.hdr.src_port = htons(p->sp);
-            udp_mask.hdr.src_port = 0xFFFF;
-            udp_spec.hdr.dst_port = htons(p->dp);
-            udp_mask.hdr.dst_port = 0xFFFF;
+        } else if (flow->proto == IPPROTO_UDP) {
+            tcp_spec.hdr.src_port = htons(flow->sp);
+            tcp_mask.hdr.src_port = 0xFFFF;
+            tcp_spec.hdr.dst_port = htons(flow->dp);
+            tcp_mask.hdr.dst_port = 0xFFFF;
             l4_spec = &udp_spec;
             l4_mask = &udp_mask;
             items[2].type = RTE_FLOW_ITEM_TYPE_UDP;
@@ -894,33 +881,34 @@ int RteFlowBypassRuleLoad(
         items[2].mask = l4_mask;
 
         struct rte_flow *src_rule_handler = NULL;
-        retval = RteFlowBypassRuleCreate(items, p->port_id, &src_rule_handler);
+        retval = RteFlowBypassRuleCreate(items, port_id, &src_rule_handler);
 
         if (retval != 0) {
-            FLOWLOCK_WRLOCK(p->flow);
-            FlowUpdateState(p->flow, FLOW_STATE_LOCAL_BYPASSED);
-            FLOWLOCK_UNLOCK(p->flow);
-            rte_mempool_put(rte_bypass_mempool, p);
+            FLOWLOCK_WRLOCK(flow);
+            FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
+            FLOWLOCK_UNLOCK(flow);
+            rte_mempool_put(rte_bypass_mempool, flow_key);
             continue;
         }
 
         /* Create rte_flow rule for the other direction */
-        if (p->is_ipv4) {
-            SCLogDebug("Add an IPv4 rte_flow bypass rule");
-            ipv4_spec.hdr.src_addr = p->ipv4_dst;
+        if (FLOW_IS_IPV4(flow)) {
+            SCLogDebug("Add an IPv4 rte_flow bypass rule in other direction");
+            ipv4_spec.hdr.src_addr = flow->dst.address.address_un_data32[0];
             ipv4_mask.hdr.src_addr = 0xFFFFFFFF;
-            ipv4_spec.hdr.dst_addr = p->ipv4_src;
+            ipv4_spec.hdr.dst_addr = flow->src.address.address_un_data32[0];
             ipv4_mask.hdr.dst_addr = 0xFFFFFFFF;
             ip_spec = &ipv4_spec;
             ip_mask = &ipv4_mask;
             items[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
 
+
         } else {
             SCLogDebug("Add an IPv6 rte_flow bypass rule");
             for (uint8_t i = 0; i < 16; i++) {
-                ipv6_spec.hdr.src_addr[i] = (p->ipv6_dst[i / 4]) >> (8 * (i % 4));
+                ipv6_spec.hdr.src_addr[i] = flow->dst.address.address_un_data8[i];
                 ipv6_mask.hdr.src_addr[i] = 0xFF;
-                ipv6_spec.hdr.dst_addr[i] = (p->ipv6_src[i / 4]) >> (8 * (i % 4));
+                ipv6_spec.hdr.dst_addr[i] = flow->src.address.address_un_data8[i];
                 ipv6_mask.hdr.dst_addr[i] = 0xFF;
             }
 
@@ -929,19 +917,19 @@ int RteFlowBypassRuleLoad(
             items[1].type = RTE_FLOW_ITEM_TYPE_IPV6;
         }
 
-        if (p->proto == IPPROTO_TCP) {
-            tcp_spec.hdr.src_port = htons(p->dp);
+        if (flow->proto == IPPROTO_TCP) {
+            tcp_spec.hdr.src_port = htons(flow->dp);
             tcp_mask.hdr.src_port = 0xFFFF;
-            tcp_spec.hdr.dst_port = htons(p->sp);
+            tcp_spec.hdr.dst_port = htons(flow->sp);
             tcp_mask.hdr.dst_port = 0xFFFF;
             l4_spec = &tcp_spec;
             l4_mask = &tcp_mask;
             items[2].type = RTE_FLOW_ITEM_TYPE_TCP;
 
-        } else if (p->proto == IPPROTO_UDP) {
-            udp_spec.hdr.src_port = htons(p->dp);
+        } else if (flow->proto == IPPROTO_UDP) {
+            udp_spec.hdr.src_port = htons(flow->dp);
             udp_mask.hdr.src_port = 0xFFFF;
-            udp_spec.hdr.dst_port = htons(p->sp);
+            udp_spec.hdr.dst_port = htons(flow->sp);
             udp_mask.hdr.dst_port = 0xFFFF;
             l4_spec = &udp_spec;
             l4_mask = &udp_mask;
@@ -954,12 +942,12 @@ int RteFlowBypassRuleLoad(
         items[2].mask = l4_mask;
 
         struct rte_flow *dst_rule_handler = NULL;
-        retval = RteFlowBypassRuleCreate(items, p->port_id, &dst_rule_handler);
+        retval = RteFlowBypassRuleCreate(items, port_id, &dst_rule_handler);
         /* If error, destroy the rule for flow in original direction */
         if (retval != 0) {
             struct rte_flow_error flow_error = { 0 };
-            int retval = rte_flow_destroy(p->port_id, src_rule_handler, &flow_error);
-            rte_mempool_put(rte_bypass_mempool, p);
+            int retval = rte_flow_destroy(port_id, src_rule_handler, &flow_error);
+            rte_mempool_put(rte_bypass_mempool, flow_key);
             if (retval != 0) {
                 SCLogError("rte_flow dynamic bypass: destroy rte_flow rule error %s errmsg: %s",
                         rte_strerror(-retval), flow_error.message);
@@ -968,8 +956,9 @@ int RteFlowBypassRuleLoad(
         }
 
         retval = RteFlowHandlerTableAddEntry(
-                flow_handler_table, src_rule_handler, dst_rule_handler, p->flow);
-        rte_mempool_put(rte_bypass_mempool, p);
+                flow_handler_table, src_rule_handler, dst_rule_handler, flow_key, FlowKeyGetHash(flow_key));
+        rte_mempool_put(rte_bypass_mempool, flow_key);
+        FLOWLOCK_UNLOCK(flow);
         bypassstats->count++;
     }
     SCReturnInt(1);
@@ -986,32 +975,43 @@ int RteFlowBypassCallback(Packet *p)
         SCReturnInt(0);
     }
 
-    RteFlowBypassPacketData *p_data = NULL;
-    if (rte_mempool_get(rte_bypass_mempool, (void **)&p_data) < 0) {
+    FlowKey *flow_key = NULL;
+    if (rte_mempool_get(rte_bypass_mempool, (void **)&flow_key) < 0) {
         SCLogError("Memory allocation for rte_flow bypass data failed");
         SCReturnInt(0);
     }
 
     if (PacketIsIPv4(p)) {
-        p_data->ipv4_src = (GET_IPV4_SRC_ADDR_U32(p));
-        p_data->ipv4_dst = (GET_IPV4_DST_ADDR_U32(p));
-        p_data->is_ipv4 = true;
+        flow_key->src.family = AF_INET;
+        flow_key->src.addr_data32[1] = 0;
+        flow_key->src.addr_data32[2] = 0;
+        flow_key->src.addr_data32[3] = 0;
+        flow_key->src.address.address_un_data32[0] = (GET_IPV4_SRC_ADDR_U32(p));
+        flow_key->dst.address.address_un_data32[0] = (GET_IPV4_DST_ADDR_U32(p));
+        flow_key->dst.family = AF_INET;
+        flow_key->dst.addr_data32[1] = 0;
+        flow_key->dst.addr_data32[2] = 0;
+        flow_key->dst.addr_data32[3] = 0;
     } else if (PacketIsIPv6(p)) {
-        memcpy(p_data->ipv6_src, GET_IPV6_SRC_ADDR(p), 16 * sizeof(uint8_t));
-        memcpy(p_data->ipv6_dst, GET_IPV6_DST_ADDR(p), 16 * sizeof(uint8_t));
-        p_data->is_ipv4 = false;
+        flow_key->src.family = AF_INET;
+        memcpy(flow_key->src.address.address_un_data8, GET_IPV6_SRC_ADDR(p), 16 * sizeof(uint8_t));
+        flow_key->dst.family = AF_INET;
+        memcpy(flow_key->dst.address.address_un_data8, GET_IPV6_DST_ADDR(p), 16 * sizeof(uint8_t));
     }
     if (p->proto == IPPROTO_TCP) {
-        p_data->proto = IPPROTO_TCP;
+        flow_key->proto = IPPROTO_TCP;
     } else {
-        p_data->proto = IPPROTO_UDP;
+        flow_key->proto = IPPROTO_UDP;
     }
-    p_data->sp = p->sp;
-    p_data->dp = p->dp;
-    p_data->flow = p->flow;
-    p_data->port_id = p->dpdk_v.mbuf->port;
+    flow_key->sp = p->sp;
+    flow_key->dp = p->dp;
+    flow_key->livedev_id = p->livedev->id;
+    flow_key->vlan_id[0] = p->vlan_id[0];
+    flow_key->vlan_id[1] = p->vlan_id[1];
+    flow_key->vlan_id[2] = p->vlan_id[2];
+    flow_key->recursion_level = 0;
 
-    int retval = rte_ring_mp_enqueue(rte_bypass_ring, p_data);
+    int retval = rte_ring_mp_enqueue(rte_bypass_ring, flow_key);
     SCReturnInt(retval == 0 ? 1 : 0);
 }
 
