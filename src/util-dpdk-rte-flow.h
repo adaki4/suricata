@@ -45,6 +45,7 @@ typedef struct RteFlowHandlerToFlow_ {
         struct rte_flow *dst_handler;
         uint32_t flow_hash;
         FlowKey flow_key;
+        Flow *flow;
     } RteFlowHandlerToFlow;
 
 typedef struct RteFlowHandlerTable_ {
@@ -76,6 +77,8 @@ int RteFlowCheckFlow(
 int RteFlowBypassRuleLoad(
         ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
 void RteFlowHandlerTableFree(void *data);
+bool RteBypassUpdate(Flow *flow, void *data, time_t tsec);
+void RteBypassFree(void *data);
 
 #endif /* HAVE_DPDK */
 #endif /* SURICATA_RTE_FLOW_RULES_H */
