@@ -69,14 +69,14 @@ int RteFlowRulesCreate(char *port_name, int port_id, RteFlowRuleStorage *rte_flo
         const char *driver_name);
 uint64_t RteFlowFilteredPacketsQuery(struct rte_flow **rte_flow_rules, uint16_t rule_count,
         char *device_name, int port_id, uint64_t *filtered_packets);
-int RteBypassInit(const char *port_name, int port_id);
+int RteBypassInit(DPDKDeviceResources *dpdk_resources, const char *port_name, int port_id);
+void RteBypassMempoolFree(void *data);
 int RteFlowBypassCallback(Packet *);
 int RteFlowBypassCheckFlowInit(ThreadVars *th_v, struct timespec *curtime, void *data);
 int RteFlowCheckFlow(
         ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
 int RteFlowBypassRuleLoad(
         ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
-void RteFlowHandlerTableFree(void *data);
 bool RteBypassUpdate(Flow *flow, void *data, time_t tsec);
 void RteBypassFree(void *data);
 

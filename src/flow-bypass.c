@@ -123,7 +123,7 @@ static TmEcode BypassedFlowManager(ThreadVars *th_v, void *thread_data)
             for (i = 0; i < g_bypassed_func_max_index; i++) {
                 if (bypassedfunclist[i].Func == NULL)
                     continue;
-                RteFlowHandlerTableFree(bypassedfunclist[i].data);
+                RteBypassMempoolFree(bypassedfunclist[i].data);
             }
 #endif
             StatsSyncCounters(th_v);
@@ -135,7 +135,7 @@ static TmEcode BypassedFlowManager(ThreadVars *th_v, void *thread_data)
                 for (i = 0; i < g_bypassed_func_max_index; i++) {
                     if (bypassedfunclist[i].Func == NULL)
                         continue;
-                    RteFlowHandlerTableFree(bypassedfunclist[i].data);
+                    RteBypassMempoolFree(bypassedfunclist[i].data);
                 }
 #endif
                 StatsSyncCounters(th_v);
