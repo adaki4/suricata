@@ -1351,7 +1351,7 @@ static int PortConfSetRteDynamicBypass(
 {
     const char *driver_name = dev_info->driver_name;
     if ((strcmp(driver_name, "net_ice") == 0) || strcmp(driver_name, "mlx5_pci") == 0) {
-        return RteBypassInit(iconf->iface, iconf->port_id);
+        return RteBypassInit(iconf->pkt_mempools, iconf->iface, iconf->port_id);
     }
     return 0;
 }
