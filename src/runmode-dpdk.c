@@ -105,6 +105,8 @@ static int DeviceConfigureQueues(DPDKIfaceConfig *iconf, const struct rte_eth_de
         const struct rte_eth_conf *port_conf);
 static int DeviceValidateOutIfaceConfig(DPDKIfaceConfig *iconf);
 static int DeviceConfigureIPS(DPDKIfaceConfig *iconf);
+static int DeviceConfigureDynamicBypass(
+        DPDKIfaceConfig *iconf, const struct rte_eth_dev_info *dev_info);
 static int DeviceConfigure(DPDKIfaceConfig *iconf);
 static void *ParseDpdkConfigAndConfigureDevice(const char *iface);
 static void DPDKDerefConfig(void *conf);
@@ -341,6 +343,12 @@ static void DPDKDerefConfig(void *conf)
     DPDKIfaceConfig *iconf = (DPDKIfaceConfig *)conf;
 
     if (SC_ATOMIC_SUB(iconf->ref, 1) == 1) {
+        if (iconf->pkt_mempools != NULL) {
+            if (iconf->pkt_mempools->bypass_mp != NULL) {
+                rte_mempool_free(iconf->pkt_mempools->bypass_mp);
+                iconf->pkt_mempools->bypass_mp = NULL;
+            }
+        }
         DPDKDeviceResourcesDeinit(&iconf->pkt_mempools);
         iconf->RteRulesFree(&iconf->drop_filter);
         SCFree(iconf);
@@ -1346,16 +1354,6 @@ static void PortConfSetInterruptMode(const DPDKIfaceConfig *iconf, struct rte_et
         port_conf->intr_conf.rxq = 1;
 }
 
-static int PortConfSetRteDynamicBypass(
-        const DPDKIfaceConfig *iconf, const struct rte_eth_dev_info *dev_info)
-{
-    const char *driver_name = dev_info->driver_name;
-    if ((strcmp(driver_name, "net_ice") == 0) || strcmp(driver_name, "mlx5_pci") == 0) {
-        return RteBypassInit(iconf->pkt_mempools, iconf->iface, iconf->port_id);
-    }
-    return 0;
-}
-
 static void PortConfSetRSSConf(const DPDKIfaceConfig *iconf,
         const struct rte_eth_dev_info *dev_info, struct rte_eth_conf *port_conf)
 {
@@ -1444,9 +1442,6 @@ static void DeviceInitPortConf(const DPDKIfaceConfig *iconf,
     };
 
     PortConfSetInterruptMode(iconf, port_conf);
-
-    // if possible, configure dynamic bypass with rte_flow -> can return error, ASK ABOUT THIS
-    PortConfSetRteDynamicBypass(iconf, dev_info);
 
     // configure RX offloads
     PortConfSetRSSConf(iconf, dev_info, port_conf);
@@ -1631,6 +1626,23 @@ static int DeviceConfigureIPS(DPDKIfaceConfig *iconf)
     SCReturnInt(0);
 }
 
+// if possible, configure dynamic bypass with rte_flow -> can return error, ASK ABOUT THIS
+static int DeviceConfigureDynamicBypass(
+        DPDKIfaceConfig *iconf, const struct rte_eth_dev_info *dev_info)
+{
+    SCEnter();
+    const char *driver_name = dev_info->driver_name;
+    int retval = 0;
+    if ((strcmp(driver_name, "net_ice") == 0) || strcmp(driver_name, "mlx5_pci") == 0) {
+        retval = RteBypassInit(iconf->pkt_mempools, iconf->iface, iconf->port_id);
+    }
+    if (retval < 0) {
+        SCLogError(
+                "%s: failed to configure dynamic bypass: %s", iconf->iface, rte_strerror(-retval));
+        SCReturnInt(retval);
+    }
+    SCReturnInt(0);
+}
 /**
  * Function verifies changes in e.g. device info after configuration has
  * happened. Sometimes (e.g. DPDK Bond PMD with Intel NICs i40e/ixgbe) change
@@ -1808,6 +1820,10 @@ static int DeviceConfigure(DPDKIfaceConfig *iconf)
         SCReturnInt(retval);
     }
 
+    retval = DeviceConfigureDynamicBypass(iconf, &dev_info);
+    if (retval < 0) {
+        SCReturnInt(retval);
+    }
     SCReturnInt(0);
 }
 
