@@ -119,25 +119,11 @@ static TmEcode BypassedFlowManager(ThreadVars *th_v, void *thread_data)
         }
 
         if (TmThreadsCheckFlag(th_v, THV_KILL)) {
-#ifdef HAVE_DPDK
-            for (i = 0; i < g_bypassed_func_max_index; i++) {
-                if (bypassedfunclist[i].Func == NULL)
-                    continue;
-                RteBypassMempoolFree(bypassedfunclist[i].data);
-            }
-#endif
             StatsSyncCounters(th_v);
             return TM_ECODE_OK;
         }
         for (i = 0; i < FLOW_BYPASS_DELAY * 100; i++) {
             if (TmThreadsCheckFlag(th_v, THV_KILL)) {
-#ifdef HAVE_DPDK
-                for (i = 0; i < g_bypassed_func_max_index; i++) {
-                    if (bypassedfunclist[i].Func == NULL)
-                        continue;
-                    RteBypassMempoolFree(bypassedfunclist[i].data);
-                }
-#endif
                 StatsSyncCounters(th_v);
                 return TM_ECODE_OK;
             }

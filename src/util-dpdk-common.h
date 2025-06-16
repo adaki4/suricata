@@ -124,7 +124,7 @@ typedef struct {
     struct rte_flow **rte_flow_rule_handlers;
     uint16_t rte_flow_rule_cnt;
     uint16_t rte_flow_rule_size;
-    struct rte_mempool **bypass_mp;
+    struct rte_mempool *bypass_mp;
     uint16_t port_id;
 } DPDKDeviceResources;
 

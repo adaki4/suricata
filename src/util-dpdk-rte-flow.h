@@ -41,12 +41,12 @@
 #include "flow-hash.h"
 
 typedef struct RteFlowHandlerToFlow_ {
-        struct rte_flow *src_handler;
-        struct rte_flow *dst_handler;
-        uint32_t flow_hash;
-        FlowKey flow_key;
-        Flow *flow;
-    } RteFlowHandlerToFlow;
+    struct rte_flow *src_handler;
+    struct rte_flow *dst_handler;
+    uint32_t flow_hash;
+    FlowKey flow_key;
+    Flow *flow;
+} RteFlowHandlerToFlow;
 
 typedef struct RteFlowHandlerTable_ {
     // timespec to periodically check the table for changes
