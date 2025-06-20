@@ -33,7 +33,7 @@
 #ifdef CAPTURE_OFFLOAD_MANAGER
 
 #ifdef HAVE_DPDK
-#define FLOW_BYPASS_DELAY 0.1f
+#define FLOW_BYPASS_DELAY       0.00001f
 #else
 #define FLOW_BYPASS_DELAY       10
 #endif /* HAVE_DPDK */

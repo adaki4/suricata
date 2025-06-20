@@ -126,10 +126,13 @@ typedef struct {
     uint16_t rte_flow_rule_size;
     struct rte_mempool *bypass_mp;
     uint16_t port_id;
+    uint16_t bypass_rte_flow_rule_cnt;
+    bool can_shutdown;
 } DPDKDeviceResources;
 
 int DPDKDeviceResourcesInit(DPDKDeviceResources **dpdk_vars, uint16_t mp_cnt);
 void DPDKDeviceResourcesDeinit(DPDKDeviceResources **dpdk_vars);
+uint32_t MempoolCacheSizeCalculate(uint32_t mp_sz);
 
 #endif /* HAVE_DPDK */
 
