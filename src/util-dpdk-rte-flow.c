@@ -590,13 +590,21 @@ int RteFlowBypassRuleLoad(
         ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data)
 {
     struct rte_mempool *rte_bypass_mempool = (struct rte_mempool *)data;
-    struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 } };
+    struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 }, { 0 } };
+    struct rte_flow_item_vlan vlan_spec = { 0 };
     void *ring_data = NULL;
     uint16_t ring_data_count = 10;
 
     /* Initialize the reusable part of rte_flow rules */
     items[0].type = RTE_FLOW_ITEM_TYPE_ETH;
-    items[3].type = RTE_FLOW_ITEM_TYPE_END;
+    items[1].type = RTE_FLOW_ITEM_TYPE_VOID;
+    // items[1].type = RTE_FLOW_ITEM_TYPE_VLAN;
+    vlan_spec.tci = htons(21);
+    vlan_spec.inner_type = RTE_ETHER_TYPE_VLAN;
+
+    // vlan_spec. = rte_cpu_to_be_16(ETH_P_IP); // Set protocol to IPv4
+    items[1].spec = &vlan_spec;
+    items[4].type = RTE_FLOW_ITEM_TYPE_END;
 
     for (uint16_t i = 0; i < ring_data_count; i++) {
         int retval = rte_ring_dequeue(rte_bypass_ring, &ring_data);
@@ -630,7 +638,7 @@ int RteFlowBypassRuleLoad(
             ipv4_mask.hdr.dst_addr = 0xFFFFFFFF;
             ip_spec = &ipv4_spec;
             ip_mask = &ipv4_mask;
-            items[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
+            items[2].type = RTE_FLOW_ITEM_TYPE_IPV4;
 
         } else {
             SCLogDebug("Add an IPv6 rte_flow bypass rule");
@@ -643,7 +651,7 @@ int RteFlowBypassRuleLoad(
 
             ip_spec = &ipv6_spec;
             ip_mask = &ipv6_mask;
-            items[1].type = RTE_FLOW_ITEM_TYPE_IPV6;
+            items[2].type = RTE_FLOW_ITEM_TYPE_IPV6;
         }
 
         if (flow->proto == IPPROTO_TCP) {
@@ -653,22 +661,22 @@ int RteFlowBypassRuleLoad(
             tcp_mask.hdr.dst_port = 0xFFFF;
             l4_spec = &tcp_spec;
             l4_mask = &tcp_mask;
-            items[2].type = RTE_FLOW_ITEM_TYPE_TCP;
+            items[3].type = RTE_FLOW_ITEM_TYPE_TCP;
 
         } else if (flow->proto == IPPROTO_UDP) {
-            tcp_spec.hdr.src_port = htons(flow->sp);
-            tcp_mask.hdr.src_port = 0xFFFF;
-            tcp_spec.hdr.dst_port = htons(flow->dp);
-            tcp_mask.hdr.dst_port = 0xFFFF;
+            udp_spec.hdr.src_port = htons(flow->sp);
+            udp_mask.hdr.src_port = 0xFFFF;
+            udp_spec.hdr.dst_port = htons(flow->dp);
+            udp_mask.hdr.dst_port = 0xFFFF;
             l4_spec = &udp_spec;
             l4_mask = &udp_mask;
-            items[2].type = RTE_FLOW_ITEM_TYPE_UDP;
+            items[3].type = RTE_FLOW_ITEM_TYPE_UDP;
         }
 
-        items[1].spec = ip_spec;
-        items[1].mask = ip_mask;
-        items[2].spec = l4_spec;
-        items[2].mask = l4_mask;
+        items[2].spec = ip_spec;
+        items[2].mask = ip_mask;
+        items[3].spec = l4_spec;
+        items[3].mask = l4_mask;
 
         struct rte_flow *src_rule_handler = NULL;
         retval = RteFlowBypassRuleCreate(items, port_id, &src_rule_handler);
@@ -681,7 +689,7 @@ int RteFlowBypassRuleLoad(
             continue;
         }
 
-        /* Create rte_flow rule for the other direction */
+        /* Create rte_flow rule for the opposite direction */
         if (FLOW_IS_IPV4(flow)) {
             SCLogDebug("Add an IPv4 rte_flow bypass rule in other direction");
             ipv4_spec.hdr.src_addr = flow->dst.address.address_un_data32[0];
@@ -690,7 +698,7 @@ int RteFlowBypassRuleLoad(
             ipv4_mask.hdr.dst_addr = 0xFFFFFFFF;
             ip_spec = &ipv4_spec;
             ip_mask = &ipv4_mask;
-            items[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
+            items[2].type = RTE_FLOW_ITEM_TYPE_IPV4;
 
         } else {
             SCLogDebug("Add an IPv6 rte_flow bypass rule");
@@ -703,7 +711,7 @@ int RteFlowBypassRuleLoad(
 
             ip_spec = &ipv6_spec;
             ip_mask = &ipv6_mask;
-            items[1].type = RTE_FLOW_ITEM_TYPE_IPV6;
+            items[2].type = RTE_FLOW_ITEM_TYPE_IPV6;
         }
 
         if (flow->proto == IPPROTO_TCP) {
@@ -713,7 +721,7 @@ int RteFlowBypassRuleLoad(
             tcp_mask.hdr.dst_port = 0xFFFF;
             l4_spec = &tcp_spec;
             l4_mask = &tcp_mask;
-            items[2].type = RTE_FLOW_ITEM_TYPE_TCP;
+            items[3].type = RTE_FLOW_ITEM_TYPE_TCP;
 
         } else if (flow->proto == IPPROTO_UDP) {
             udp_spec.hdr.src_port = htons(flow->dp);
@@ -722,16 +730,17 @@ int RteFlowBypassRuleLoad(
             udp_mask.hdr.dst_port = 0xFFFF;
             l4_spec = &udp_spec;
             l4_mask = &udp_mask;
-            items[2].type = RTE_FLOW_ITEM_TYPE_UDP;
+            items[3].type = RTE_FLOW_ITEM_TYPE_UDP;
         }
 
-        items[1].spec = ip_spec;
-        items[1].mask = ip_mask;
-        items[2].spec = l4_spec;
-        items[2].mask = l4_mask;
+        items[2].spec = ip_spec;
+        items[2].mask = ip_mask;
+        items[3].spec = l4_spec;
+        items[3].mask = l4_mask;
 
         struct rte_flow *dst_rule_handler = NULL;
         retval = RteFlowBypassRuleCreate(items, port_id, &dst_rule_handler);
+        SCLogInfo("rte_flow dynamic bypass: created rule");
         /* If error, destroy the rule for flow in original direction and set flow state to local
          * bypass*/
         if (retval != 0) {
