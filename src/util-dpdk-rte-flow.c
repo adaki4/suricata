@@ -469,7 +469,6 @@ int RteBypassInit(DPDKDeviceResources *dpdk_resources, uint32_t bypass_ring_size
 static int RteFlowHandlerTableUpdateStats(FlowBypassInfo *fc, uint16_t port_id,
         struct rte_flow *src_rule_handler, struct rte_flow *dst_rule_handler)
 {
-
     struct rte_flow_query_count query_count = { 0 };
     struct rte_flow_action action[] = { { 0 }, { 0 }, { 0 } };
     struct rte_flow_error flow_error = { 0 };
@@ -782,7 +781,7 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
     }
     bool activity = RteFlowHandlerTableUpdateStats(fc, flow->livedev->dpdk_vars->port_id,
             flow_handler_info->src_handler, flow_handler_info->dst_handler);
-    if (!activity) {
+    if (activity != 1) {
         struct rte_flow_error flow_error = { 0 };
         int retval = rte_flow_destroy(
                 flow->livedev->dpdk_vars->port_id, flow_handler_info->src_handler, &flow_error);
