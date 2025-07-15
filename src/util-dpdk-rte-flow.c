@@ -590,20 +590,15 @@ int RteFlowBypassRuleLoad(
 {
     struct rte_mempool *rte_bypass_mempool = (struct rte_mempool *)data;
     struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 }, { 0 } };
-    struct rte_flow_item_vlan vlan_spec = { 0 };
+    // struct rte_flow_item_vlan vlan_spec = { 0 };
     void *ring_data = NULL;
-    uint16_t ring_data_count = 10;
+    uint16_t ring_data_count = 20;
+    uint16_t L2_INDEX = 0, L3_INDEX = 1, L4_INDEX = 2, END_INDEX = 3; 
 
     /* Initialize the reusable part of rte_flow rules */
-    items[0].type = RTE_FLOW_ITEM_TYPE_ETH;
-    items[1].type = RTE_FLOW_ITEM_TYPE_VOID;
-    // items[1].type = RTE_FLOW_ITEM_TYPE_VLAN;
-    vlan_spec.tci = htons(21);
-    vlan_spec.inner_type = RTE_ETHER_TYPE_VLAN;
+    items[L2_INDEX].type = RTE_FLOW_ITEM_TYPE_ETH;
 
-    // vlan_spec. = rte_cpu_to_be_16(ETH_P_IP); // Set protocol to IPv4
-    items[1].spec = &vlan_spec;
-    items[4].type = RTE_FLOW_ITEM_TYPE_END;
+    items[END_INDEX].type = RTE_FLOW_ITEM_TYPE_END;
 
     for (uint16_t i = 0; i < ring_data_count; i++) {
         int retval = rte_ring_dequeue(rte_bypass_ring, &ring_data);
@@ -637,7 +632,7 @@ int RteFlowBypassRuleLoad(
             ipv4_mask.hdr.dst_addr = 0xFFFFFFFF;
             ip_spec = &ipv4_spec;
             ip_mask = &ipv4_mask;
-            items[2].type = RTE_FLOW_ITEM_TYPE_IPV4;
+            items[L3_INDEX].type = RTE_FLOW_ITEM_TYPE_IPV4;
 
         } else {
             SCLogDebug("Add an IPv6 rte_flow bypass rule");
@@ -650,7 +645,7 @@ int RteFlowBypassRuleLoad(
 
             ip_spec = &ipv6_spec;
             ip_mask = &ipv6_mask;
-            items[2].type = RTE_FLOW_ITEM_TYPE_IPV6;
+            items[L3_INDEX].type = RTE_FLOW_ITEM_TYPE_IPV6;
         }
 
         if (flow->proto == IPPROTO_TCP) {
@@ -660,7 +655,7 @@ int RteFlowBypassRuleLoad(
             tcp_mask.hdr.dst_port = 0xFFFF;
             l4_spec = &tcp_spec;
             l4_mask = &tcp_mask;
-            items[3].type = RTE_FLOW_ITEM_TYPE_TCP;
+            items[L4_INDEX].type = RTE_FLOW_ITEM_TYPE_TCP;
 
         } else if (flow->proto == IPPROTO_UDP) {
             udp_spec.hdr.src_port = htons(flow->sp);
@@ -669,13 +664,13 @@ int RteFlowBypassRuleLoad(
             udp_mask.hdr.dst_port = 0xFFFF;
             l4_spec = &udp_spec;
             l4_mask = &udp_mask;
-            items[3].type = RTE_FLOW_ITEM_TYPE_UDP;
+            items[L4_INDEX].type = RTE_FLOW_ITEM_TYPE_UDP;
         }
 
-        items[2].spec = ip_spec;
-        items[2].mask = ip_mask;
-        items[3].spec = l4_spec;
-        items[3].mask = l4_mask;
+        items[L3_INDEX].spec = ip_spec;
+        items[L3_INDEX].mask = ip_mask;
+        items[L4_INDEX].spec = l4_spec;
+        items[L4_INDEX].mask = l4_mask;
 
         struct rte_flow *src_rule_handler = NULL;
         retval = RteFlowBypassRuleCreate(items, port_id, &src_rule_handler);
@@ -697,7 +692,7 @@ int RteFlowBypassRuleLoad(
             ipv4_mask.hdr.dst_addr = 0xFFFFFFFF;
             ip_spec = &ipv4_spec;
             ip_mask = &ipv4_mask;
-            items[2].type = RTE_FLOW_ITEM_TYPE_IPV4;
+            items[L3_INDEX].type = RTE_FLOW_ITEM_TYPE_IPV4;
 
         } else {
             SCLogDebug("Add an IPv6 rte_flow bypass rule");
@@ -710,7 +705,7 @@ int RteFlowBypassRuleLoad(
 
             ip_spec = &ipv6_spec;
             ip_mask = &ipv6_mask;
-            items[2].type = RTE_FLOW_ITEM_TYPE_IPV6;
+            items[L3_INDEX].type = RTE_FLOW_ITEM_TYPE_IPV6;
         }
 
         if (flow->proto == IPPROTO_TCP) {
@@ -720,7 +715,7 @@ int RteFlowBypassRuleLoad(
             tcp_mask.hdr.dst_port = 0xFFFF;
             l4_spec = &tcp_spec;
             l4_mask = &tcp_mask;
-            items[3].type = RTE_FLOW_ITEM_TYPE_TCP;
+            items[L4_INDEX].type = RTE_FLOW_ITEM_TYPE_TCP;
 
         } else if (flow->proto == IPPROTO_UDP) {
             udp_spec.hdr.src_port = htons(flow->dp);
@@ -729,13 +724,13 @@ int RteFlowBypassRuleLoad(
             udp_mask.hdr.dst_port = 0xFFFF;
             l4_spec = &udp_spec;
             l4_mask = &udp_mask;
-            items[3].type = RTE_FLOW_ITEM_TYPE_UDP;
+            items[L4_INDEX].type = RTE_FLOW_ITEM_TYPE_UDP;
         }
 
-        items[2].spec = ip_spec;
-        items[2].mask = ip_mask;
-        items[3].spec = l4_spec;
-        items[3].mask = l4_mask;
+        items[L3_INDEX].spec = ip_spec;
+        items[L3_INDEX].mask = ip_mask;
+        items[L4_INDEX].spec = l4_spec;
+        items[L4_INDEX].mask = l4_mask;
 
         struct rte_flow *dst_rule_handler = NULL;
         retval = RteFlowBypassRuleCreate(items, port_id, &dst_rule_handler);
