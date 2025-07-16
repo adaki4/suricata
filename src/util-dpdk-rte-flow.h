@@ -43,9 +43,7 @@
 typedef struct RteFlowHandlerToFlow_ {
     struct rte_flow *src_handler;
     struct rte_flow *dst_handler;
-    uint32_t flow_hash;
-    FlowKey flow_key;
-    Flow *flow;
+    DPDKDeviceResources *dpdk_vars;
 } RteFlowHandlerToFlow;
 
 typedef struct RteFlowHandlerTable_ {
