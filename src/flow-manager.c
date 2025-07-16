@@ -950,7 +950,7 @@ static TmEcode FlowManager(ThreadVars *th_v, void *thread_data)
         }
         if (other_last_sec == 0 || other_last_sec < (uint32_t)SCTIME_SECS(ts)) {
             if (ftd->instance == 0) {
-                StatsSetUI64(th_v, ftd->counter_defrag_memuse, DefragTrackerGetMemcap());
+                StatsSetUI64(th_v, ftd->counter_defrag_memuse, DefragTrackerGetMemuse());
                 uint32_t defrag_cnt = DefragTimeoutHash(ts);
                 if (defrag_cnt) {
                     StatsAddUI64(th_v, ftd->counter_defrag_timeout, defrag_cnt);
@@ -966,8 +966,10 @@ static TmEcode FlowManager(ThreadVars *th_v, void *thread_data)
         if (TmThreadsCheckFlag(th_v, THV_KILL)) {
             SC_ATOMIC_OR(flow_flags, FLOW_SHUTDOWN);
             FlowTimeoutCounters counters = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, };
+            /*Pass through all flows to gather counters from bypassed flows*/
             FlowTimeoutHash(&ftd->timeout, ts, ftd->min, ftd->max, &counters);
             FlowCountersUpdate(th_v, ftd, &counters);
+            SC_ATOMIC_OR(flow_flags, FLOW_SHUTDOWN_END);
             StatsSyncCounters(th_v);
             break;
         }
