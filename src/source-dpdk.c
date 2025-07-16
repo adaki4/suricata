@@ -87,6 +87,7 @@ TmEcode NoDPDKSupportExit(ThreadVars *tv, const void *initdata, void **data)
 
 #else /* We have DPDK support */
 
+#include "flow-private.h"
 #include "util-affinity.h"
 #include "util-dpdk.h"
 #include "util-dpdk-i40e.h"
@@ -105,6 +106,7 @@ TmEcode NoDPDKSupportExit(ThreadVars *tv, const void *initdata, void **data)
 #define STANDARD_SLEEP_TIME_US       100U
 #define MAX_EPOLL_TIMEOUT_MS         500U
 static rte_spinlock_t intr_lock[RTE_MAX_ETHPORTS];
+SC_ATOMIC_EXTERN(unsigned int, flow_flags);
 
 /**
  * \brief Structure to hold thread specific variables.
@@ -525,9 +527,15 @@ static void HandleShutdown(DPDKThreadVars *ptv)
         // If Suricata runs in peered mode, the peer threads might still want to send
         // packets to our port. Instead, we know, that we are done with the peered port, so
         // we stop it. The peered threads will stop our port.
-        while (ptv->livedev->dpdk_vars->bypass_rte_flow_rule_cnt != 0) {
-            rte_delay_us(10);
+        // while (SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_create) != SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_destroy)) {
+        //     SCLogInfo("Waiting for all bypass rte_flow rules to be removed, %d created, %d destroyed", SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_create), SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_destroy));
+        //     rte_delay_us(1000000);
+        // }
+        while ((SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN_END) == 0 || (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN) == 0) {
+            SCLogInfo("Waiting for all bypass rte_flow rules to be removed");
+            rte_delay_us(1000000);
         }
+        // SCLogInfo("Reamining uncounted flows, %d", SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_cnt));
         if (ptv->copy_mode == DPDK_COPY_MODE_TAP || ptv->copy_mode == DPDK_COPY_MODE_IPS) {
             rte_eth_dev_stop(ptv->out_port_id);
         } else {
