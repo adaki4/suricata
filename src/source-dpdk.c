@@ -535,7 +535,7 @@ static void HandleShutdown(DPDKThreadVars *ptv)
             SCLogInfo("Waiting for all bypass rte_flow rules to be removed");
             rte_delay_us(1000000);
         }
-        // SCLogInfo("Reamining uncounted flows, %d", SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_cnt));
+        SCLogInfo("Waiting for all bypass rte_flow rules to be removed, %d created, %d destroyed", SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_create), SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_destroy));
         if (ptv->copy_mode == DPDK_COPY_MODE_TAP || ptv->copy_mode == DPDK_COPY_MODE_IPS) {
             rte_eth_dev_stop(ptv->out_port_id);
         } else {

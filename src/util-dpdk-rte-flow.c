@@ -786,6 +786,7 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
             }
             flow_handler_info->dst_handler = NULL;
             SC_ATOMIC_ADD(flow_handler_info->dpdk_vars->bypass_rte_flow_rule_cnt_destroy, 1);
+            // SCLogInfo("Timeouted bypassed flow");
         }
     } else if (unlikely(suricata_ctl_flags != 0)) {
         activity = 0;
