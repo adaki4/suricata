@@ -236,7 +236,7 @@ static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters
     if (f->flow_state != FLOW_STATE_CAPTURE_BYPASSED) {
         return true;
     }
-
+    const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
     FlowBypassInfo *fc = FlowGetStorageById(f, GetFlowBypassInfoID());
     if (fc && fc->BypassUpdate) {
         /* flow will be possibly updated */
@@ -245,8 +245,8 @@ static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters
         uint64_t pkts_todst = fc->todstpktcnt;
         uint64_t bytes_todst = fc->todstbytecnt;
         bool update = fc->BypassUpdate(f, fc->bypass_data, SCTIME_SECS(ts));
-        if (update) {
-            SCLogDebug("Updated flow: %" PRIu64 "", FlowGetId(f));
+        if (update || shutdown) {
+            SCLogDebug("Updated flow: %"PRId64"", FlowGetId(f));
             pkts_tosrc = fc->tosrcpktcnt - pkts_tosrc;
             bytes_tosrc = fc->tosrcbytecnt - bytes_tosrc;
             pkts_todst = fc->todstpktcnt - pkts_todst;
@@ -266,6 +266,8 @@ static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters
             } else if (FLOW_IS_IPV6(f)) {
                 LiveDevSubBypassStats(f->livedev, 1, AF_INET6);
             }
+            SCLogInfo("rules added %d, rules discarded %d", SC_ATOMIC_GET(f->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_create),
+                    SC_ATOMIC_GET(f->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_destroy));
         }
         counters->bypassed_count++;
     }
