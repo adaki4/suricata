@@ -42,6 +42,7 @@
 #include "util-dpdk-rte-flow-pattern.h"
 #include "util-device-private.h"
 #include "runmodes.h"
+#include "tm-threads.h"
 #include "suricata.h"
 #include <net/if.h>
 #include <rte_ring.h>
@@ -433,6 +434,7 @@ int RteBypassInit(DPDKDeviceResources *dpdk_resources, uint32_t bypass_ring_size
                 RTE_BYPASS_RING_NAME, rte_strerror(rte_errno));
         SCReturnInt(-1);
     }
+    SCLogInfo("%d Bypass ring size", bypass_ring_size);
 
     uint32_t mempool_size = (bypass_ring_size * 2) - 1;
     struct rte_mempool *rte_bypass_mempool = rte_mempool_create(RTE_BYPASS_MEMPOOL_NAME,
@@ -483,13 +485,13 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, uint16_t port_id,
     if (retval != 0) {
         SCLogError("rte_flow dynamic bypass: count query error %s errmsg: %s",
                 rte_strerror(-retval), flow_error.message);
-        SCReturnInt(retval);
     };
 
     uint32_t src_packets = query_count.hits;
     uint32_t src_bytes = query_count.bytes;
 
     memset(&query_count, 0, sizeof(struct rte_flow_query_count));
+    query_count.reset = 1;
     retval = rte_flow_query(
             port_id, dst_rule_handler, &(action[0]), (void *)&query_count, &flow_error);
     if (retval != 0) {
@@ -507,6 +509,7 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, uint16_t port_id,
         fc->tosrcbytecnt += src_bytes;
         fc->todstpktcnt += dst_packets;
         fc->todstbytecnt += dst_bytes;
+        // SCLogInfo("rte_flow dynamic bypass, src packets %u, src bytes %u, dst packets %u, dst bytes %u",src_packets, src_bytes, dst_packets, dst_bytes);
         SCReturnInt(1);
     }
     SCReturnInt(0);
@@ -586,24 +589,26 @@ int RteFlowBypassRuleLoad(
     struct rte_mempool *rte_bypass_mempool = (struct rte_mempool *)data;
     struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 }, { 0 } };
     // struct rte_flow_item_vlan vlan_spec = { 0 };
-    void *ring_data = NULL;
-    uint16_t ring_data_count = 20;
     uint16_t L2_INDEX = 0, L3_INDEX = 1, L4_INDEX = 2, END_INDEX = 3; 
+    uint16_t ring_dequeue_num = 20;
     uint32_t success_count = 0;
+    FlowKey *ring_data[ring_dequeue_num];
 
     /* Initialize the reusable part of rte_flow rules */
     items[L2_INDEX].type = RTE_FLOW_ITEM_TYPE_ETH;
     items[END_INDEX].type = RTE_FLOW_ITEM_TYPE_END;
 
-    uint32_t rx_packets = rte_ring_dequeue_burst(rte_bypass_ring, &ring_data, ring_data_count, NULL);
-    for (uint16_t i = 0; i < rx_packets; i++) {
+    uint32_t to_bypass_packets = rte_ring_dequeue_burst(rte_bypass_ring, (void **)ring_data, ring_dequeue_num, NULL);
+    // if (to_bypass_packets != 0)
+    //     SCLogInfo("to_bypass_packets: %u", to_bypass_packets);
+    for (uint16_t i = 0; i < to_bypass_packets; i++) {
         struct rte_flow_item_ipv4 ipv4_spec = { 0 }, ipv4_mask = { 0 };
         struct rte_flow_item_ipv6 ipv6_spec = { 0 }, ipv6_mask = { 0 };
         struct rte_flow_item_tcp tcp_spec = { 0 }, tcp_mask = { 0 };
         struct rte_flow_item_udp udp_spec = { 0 }, udp_mask = { 0 };
         void *ip_spec = NULL, *ip_mask = NULL, *l4_spec = NULL, *l4_mask = NULL;
 
-        FlowKey *flow_key = (FlowKey *)ring_data;
+        FlowKey *flow_key = ring_data[i];
         uint32_t flow_hash = FlowKeyGetHash(flow_key);
         Flow *flow = FlowGetExistingFlowFromHash(flow_key, flow_hash);
         if (flow == NULL) {
@@ -625,7 +630,6 @@ int RteFlowBypassRuleLoad(
             ip_spec = &ipv4_spec;
             ip_mask = &ipv4_mask;
             items[L3_INDEX].type = RTE_FLOW_ITEM_TYPE_IPV4;
-
         } else {
             SCLogDebug("Add an IPv6 rte_flow bypass rule");
             for (uint8_t i = 0; i < 16; i++) {
@@ -634,7 +638,6 @@ int RteFlowBypassRuleLoad(
                 ipv6_spec.hdr.dst_addr[i] = flow->dst.address.address_un_data8[i];
                 ipv6_mask.hdr.dst_addr[i] = 0xFF;
             }
-
             ip_spec = &ipv6_spec;
             ip_mask = &ipv6_mask;
             items[L3_INDEX].type = RTE_FLOW_ITEM_TYPE_IPV6;
@@ -657,6 +660,7 @@ int RteFlowBypassRuleLoad(
             l4_mask = &udp_mask;
             items[L4_INDEX].type = RTE_FLOW_ITEM_TYPE_UDP;
         }
+
         items[L3_INDEX].spec = ip_spec;
         items[L3_INDEX].mask = ip_mask;
         items[L4_INDEX].spec = l4_spec;
@@ -682,7 +686,6 @@ int RteFlowBypassRuleLoad(
             ip_spec = &ipv4_spec;
             ip_mask = &ipv4_mask;
             items[L3_INDEX].type = RTE_FLOW_ITEM_TYPE_IPV4;
-
         } else {
             SCLogDebug("Add an IPv6 rte_flow bypass rule");
             for (uint8_t i = 0; i < 16; i++) {
@@ -738,9 +741,12 @@ int RteFlowBypassRuleLoad(
         }
         int inet_family;
         if (FLOW_IS_IPV4(flow)) inet_family = AF_INET;
-        else  inet_family = AF_INET6;
+        else inet_family = AF_INET6;
         retval = RteFlowSetFlowBypassInfo(flow, src_rule_handler, dst_rule_handler, inet_family);
         if (retval != 0) {
+        //     if (TmThreadsCheckFlag(th_v, THV_KILL)) {
+        //         return TM_ECODE_OK;
+        //     }
             SC_ATOMIC_ADD(flow->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_create, 1);
             // SCLogInfo("rte_flow dynamic bypass: %d rules created", 
             //         SC_ATOMIC_GET(flow->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_create));
@@ -767,7 +773,7 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
     }
     bool activity = RteFlowUpdateStats(fc, flow->livedev->dpdk_vars->port_id,
             flow_handler_info->src_handler, flow_handler_info->dst_handler);
-    if (activity != 1) {
+    if (activity != 1 || unlikely(suricata_ctl_flags != 0)) {
         struct rte_flow_error flow_error = { 0 };
         int retval;
         if (flow_handler_info->src_handler != NULL) {
@@ -785,19 +791,19 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
                     rte_strerror(-retval), flow_error.message);
             }
             flow_handler_info->dst_handler = NULL;
+            if (activity != 0) {
+                activity = 0;
+            }
             SC_ATOMIC_ADD(flow_handler_info->dpdk_vars->bypass_rte_flow_rule_cnt_destroy, 1);
         }
-    } else if (unlikely(suricata_ctl_flags != 0)) {
-        activity = 0;
-        SC_ATOMIC_ADD(flow->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_destroy, 1);
     } else {
         flow->lastts = SCTIME_FROM_SECS(tsec);
     }
-    uint32_t bypass_rule_count = SC_ATOMIC_GET(flow->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_destroy);
+    // uint32_t bypass_rule_count = SC_ATOMIC_GET(flow->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_destroy);
     // SCLogInfo("rte_flow dynamic bypass: %d rules destroyed", bypass_rule_count);
-    if (bypass_rule_count) {
-        flow->livedev->dpdk_vars->can_shutdown = true;
-    }
+    // if (bypass_rule_count) {
+    //     flow->livedev->dpdk_vars->can_shutdown = true;
+    // }
     SCReturnBool(activity);
 }
 
@@ -830,6 +836,11 @@ static int RteFlowSetFlowBypassInfo(
         RteFlowHandlerToFlow *flow_handler_info = SCCalloc(1, sizeof(RteFlowHandlerToFlow));
         if (flow_handler_info == NULL) {
             // May add more failure logic
+            LiveDevAddBypassFail(flow->livedev, 1, family);
+            SCReturnInt(0);
+        }
+        if (flow_handler_info->src_handler != NULL || flow_handler_info->dst_handler != NULL) {
+            SCLogError("rte_flow dynamic bypass: flow_handler_info already has handlers set");
             LiveDevAddBypassFail(flow->livedev, 1, family);
             SCReturnInt(0);
         }
@@ -886,11 +897,11 @@ int RteFlowBypassCallback(Packet *p)
         flow_key->src.addr_data32[2] = 0;
         flow_key->src.addr_data32[3] = 0;
         flow_key->src.address.address_un_data32[0] = (GET_IPV4_SRC_ADDR_U32(p));
-        flow_key->dst.address.address_un_data32[0] = (GET_IPV4_DST_ADDR_U32(p));
         flow_key->dst.family = AF_INET;
         flow_key->dst.addr_data32[1] = 0;
         flow_key->dst.addr_data32[2] = 0;
         flow_key->dst.addr_data32[3] = 0;
+        flow_key->dst.address.address_un_data32[0] = (GET_IPV4_DST_ADDR_U32(p));
     } else if (PacketIsIPv6(p)) {
         flow_key->src.family = AF_INET6;
         memcpy(flow_key->src.address.address_un_data8, GET_IPV6_SRC_ADDR(p), 16 * sizeof(uint8_t));
