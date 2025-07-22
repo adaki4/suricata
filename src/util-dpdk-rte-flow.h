@@ -41,6 +41,7 @@
 #include "flow-hash.h"
 
 typedef struct RteFlowHandlerToFlow_ {
+    Flow *flow;    
     struct rte_flow *src_handler;
     struct rte_flow *dst_handler;
     DPDKDeviceResources *dpdk_vars;

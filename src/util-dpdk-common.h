@@ -125,9 +125,9 @@ typedef struct {
     uint16_t rte_flow_rule_cnt;
     uint16_t rte_flow_rule_size;
     struct rte_mempool *bypass_mp;
-    uint16_t port_id;
-    SC_ATOMIC_DECLARE(uint16_t, bypass_rte_flow_rule_cnt_destroy);
-    SC_ATOMIC_DECLARE(uint16_t, bypass_rte_flow_rule_cnt_create);
+    uint16_t port_id;;
+    SC_ATOMIC_DECLARE(int32_t, bypass_rte_flow_rule_active_cnt);
+    SC_ATOMIC_DECLARE(int32_t, bypass_rte_flow_rule_active_cnt_created);
     bool can_shutdown;
 } DPDKDeviceResources;
 

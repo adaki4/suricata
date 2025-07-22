@@ -423,6 +423,7 @@ int RteFlowRulesCreate(
  */
 int RteBypassInit(DPDKDeviceResources *dpdk_resources, uint32_t bypass_ring_size, const char *port_name, int port_id)
 {
+    SCEnter();
     LiveDevice *livedev = LiveGetDevice(port_name);
 
     LiveDevUseBypass(livedev);
@@ -450,8 +451,8 @@ int RteBypassInit(DPDKDeviceResources *dpdk_resources, uint32_t bypass_ring_size
 
     dpdk_resources->bypass_mp = rte_bypass_mempool;
     dpdk_resources->can_shutdown = false;
-    SC_ATOMIC_INIT(dpdk_resources->bypass_rte_flow_rule_cnt_create);
-    SC_ATOMIC_INIT(dpdk_resources->bypass_rte_flow_rule_cnt_destroy);
+    SC_ATOMIC_INIT(dpdk_resources->bypass_rte_flow_rule_active_cnt);
+    SC_ATOMIC_INIT(dpdk_resources->bypass_rte_flow_rule_active_cnt_created);
 
     SCReturnInt(0);
 }
@@ -469,6 +470,7 @@ int RteBypassInit(DPDKDeviceResources *dpdk_resources, uint32_t bypass_ring_size
 static int RteFlowUpdateStats(FlowBypassInfo *fc, uint16_t port_id,
         struct rte_flow *src_rule_handler, struct rte_flow *dst_rule_handler)
 {
+    SCEnter();
     struct rte_flow_query_count query_count = { 0 };
     struct rte_flow_action action[] = { { 0 }, { 0 }, { 0 } };
     struct rte_flow_error flow_error = { 0 };
@@ -497,7 +499,6 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, uint16_t port_id,
     if (retval != 0) {
         SCLogError("rte_flow dynamic bypass: count query error %s errmsg: %s",
                 rte_strerror(-retval), flow_error.message);
-        SCReturnInt(retval);
     };
 
     uint32_t dst_packets = query_count.hits;
@@ -586,6 +587,7 @@ int RteFlowBypassCheckFlowInit(ThreadVars *th_v, struct timespec *curtime, void 
 int RteFlowBypassRuleLoad(
         ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data)
 {
+    SCEnter();
     struct rte_mempool *rte_bypass_mempool = (struct rte_mempool *)data;
     struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 }, { 0 } };
     // struct rte_flow_item_vlan vlan_spec = { 0 };
@@ -599,8 +601,6 @@ int RteFlowBypassRuleLoad(
     items[END_INDEX].type = RTE_FLOW_ITEM_TYPE_END;
 
     uint32_t to_bypass_packets = rte_ring_dequeue_burst(rte_bypass_ring, (void **)ring_data, ring_dequeue_num, NULL);
-    // if (to_bypass_packets != 0)
-    //     SCLogInfo("to_bypass_packets: %u", to_bypass_packets);
     for (uint16_t i = 0; i < to_bypass_packets; i++) {
         struct rte_flow_item_ipv4 ipv4_spec = { 0 }, ipv4_mask = { 0 };
         struct rte_flow_item_ipv6 ipv6_spec = { 0 }, ipv6_mask = { 0 };
@@ -724,7 +724,6 @@ int RteFlowBypassRuleLoad(
 
         struct rte_flow *dst_rule_handler = NULL;
         retval = RteFlowBypassRuleCreate(items, port_id, &dst_rule_handler);
-        // SCLogInfo("rte_flow dynamic bypass: created rule");
         /* If error, destroy the rule for flow in original direction and set flow state to local
          * bypass*/
         if (retval != 0) {
@@ -744,12 +743,8 @@ int RteFlowBypassRuleLoad(
         else inet_family = AF_INET6;
         retval = RteFlowSetFlowBypassInfo(flow, src_rule_handler, dst_rule_handler, inet_family);
         if (retval != 0) {
-        //     if (TmThreadsCheckFlag(th_v, THV_KILL)) {
-        //         return TM_ECODE_OK;
-        //     }
-            SC_ATOMIC_ADD(flow->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_create, 1);
-            // SCLogInfo("rte_flow dynamic bypass: %d rules created", 
-            //         SC_ATOMIC_GET(flow->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_create));
+            SC_ATOMIC_ADD(flow->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt, 1);
+            SC_ATOMIC_ADD(flow->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt_created, 1);
             bypassstats->count++;
             success_count++;
         }
@@ -769,6 +764,10 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
     FlowBypassInfo *fc = FlowGetStorageById(flow, GetFlowBypassInfoID());
     if (fc == NULL) {
         SCLogError("rte_flow dynamic bypass: flow_bypass_info is NULL");
+        return false;
+    }
+    if (flow_handler_info->src_handler == NULL || flow_handler_info->dst_handler == NULL) {
+        SCLogError("rte_flow dynamic bypass: flow_handler_info has no handlers set");
         return false;
     }
     bool activity = RteFlowUpdateStats(fc, flow->livedev->dpdk_vars->port_id,
@@ -794,13 +793,11 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
             if (activity != 0) {
                 activity = 0;
             }
-            SC_ATOMIC_ADD(flow_handler_info->dpdk_vars->bypass_rte_flow_rule_cnt_destroy, 1);
+            SC_ATOMIC_SUB(flow_handler_info->dpdk_vars->bypass_rte_flow_rule_active_cnt, 1);
         }
     } else {
         flow->lastts = SCTIME_FROM_SECS(tsec);
     }
-    // uint32_t bypass_rule_count = SC_ATOMIC_GET(flow->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_destroy);
-    // SCLogInfo("rte_flow dynamic bypass: %d rules destroyed", bypass_rule_count);
     // if (bypass_rule_count) {
     //     flow->livedev->dpdk_vars->can_shutdown = true;
     // }
@@ -810,6 +807,29 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
 void RteBypassFree(void *data)
 {
     RteFlowHandlerToFlow *flow_handler_info = (RteFlowHandlerToFlow *)data;
+    struct rte_flow_error flow_error = { 0 };
+    if (flow_handler_info->src_handler != NULL && flow_handler_info->dst_handler != NULL) {
+        FlowBypassInfo *fc = FlowGetStorageById(flow_handler_info->flow, GetFlowBypassInfoID());
+        if (fc == NULL) {
+            SCLogError("rte_flow dynamic bypass: flow_bypass_info is NULL");
+            return;
+        }
+        RteFlowUpdateStats(fc, flow_handler_info->flow->livedev->dpdk_vars->port_id,
+                flow_handler_info->src_handler, flow_handler_info->dst_handler);
+        int retval = rte_flow_destroy(flow_handler_info->dpdk_vars->port_id, flow_handler_info->src_handler, &flow_error);
+        if (retval != 0) {
+            SCLogError("rte_flow dynamic bypass: destroy rte_flow rule error %s errmsg: %s",
+                    rte_strerror(-retval), flow_error.message);
+        }
+        flow_handler_info->src_handler = NULL;
+        retval = rte_flow_destroy(flow_handler_info->dpdk_vars->port_id, flow_handler_info->dst_handler, &flow_error);
+        if (retval != 0) {
+            SCLogError("rte_flow dynamic bypass: destroy rte_flow rule error %s errmsg: %s",
+                rte_strerror(-retval), flow_error.message);
+        }
+        flow_handler_info->dst_handler = NULL;
+        SC_ATOMIC_SUB(flow_handler_info->dpdk_vars->bypass_rte_flow_rule_active_cnt, 1);
+    }
     if (flow_handler_info != NULL) {
         SCFree(flow_handler_info);
     }
@@ -844,6 +864,7 @@ static int RteFlowSetFlowBypassInfo(
             LiveDevAddBypassFail(flow->livedev, 1, family);
             SCReturnInt(0);
         }
+        flow_handler_info->flow = flow;
         flow_handler_info->src_handler = src_handler;
         flow_handler_info->dst_handler = dst_handler;
         flow_handler_info->dpdk_vars = flow->livedev->dpdk_vars;
@@ -852,8 +873,7 @@ static int RteFlowSetFlowBypassInfo(
         fc->BypassFree = RteBypassFree;
     } else {
         struct rte_flow_error flow_error = { 0 };
-        int retval;
-        retval = rte_flow_destroy(flow->livedev->dpdk_vars->port_id, src_handler, &flow_error);
+        int retval = rte_flow_destroy(flow->livedev->dpdk_vars->port_id, src_handler, &flow_error);
         if (retval != 0) {
             SCLogError("rte_flow dynamic bypass: destroy rte_flow rule error %s errmsg: %s",
                     rte_strerror(-retval), flow_error.message);
@@ -872,6 +892,19 @@ static int RteFlowSetFlowBypassInfo(
     LiveDevAddBypassStats(flow->livedev, 1, family);
     LiveDevAddBypassSuccess(flow->livedev, 1, family);
     SCReturnInt(1);
+}
+
+static int RteFlowInitMempoolObject(struct rte_mempool *mp, void *opaque, void *obj,
+        unsigned int obj_idx)
+{
+    FlowKey *flow_key = (FlowKey *)obj;
+    if (flow_key == NULL) {
+        SCLogError("rte_flow dynamic bypass: flow_key is NULL");
+        return -1;
+    }
+    memset(flow_key, 0, sizeof(FlowKey));
+    flow_key->recursion_level = 0;
+    return 0;
 }
 
 int RteFlowBypassCallback(Packet *p)
@@ -893,14 +926,8 @@ int RteFlowBypassCallback(Packet *p)
 
     if (PacketIsIPv4(p)) {
         flow_key->src.family = AF_INET;
-        flow_key->src.addr_data32[1] = 0;
-        flow_key->src.addr_data32[2] = 0;
-        flow_key->src.addr_data32[3] = 0;
         flow_key->src.address.address_un_data32[0] = (GET_IPV4_SRC_ADDR_U32(p));
         flow_key->dst.family = AF_INET;
-        flow_key->dst.addr_data32[1] = 0;
-        flow_key->dst.addr_data32[2] = 0;
-        flow_key->dst.addr_data32[3] = 0;
         flow_key->dst.address.address_un_data32[0] = (GET_IPV4_DST_ADDR_U32(p));
     } else if (PacketIsIPv6(p)) {
         flow_key->src.family = AF_INET6;

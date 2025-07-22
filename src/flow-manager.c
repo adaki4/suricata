@@ -266,8 +266,6 @@ static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters
             } else if (FLOW_IS_IPV6(f)) {
                 LiveDevSubBypassStats(f->livedev, 1, AF_INET6);
             }
-            SCLogInfo("rules added %d, rules discarded %d", SC_ATOMIC_GET(f->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_create),
-                    SC_ATOMIC_GET(f->livedev->dpdk_vars->bypass_rte_flow_rule_cnt_destroy));
         }
         counters->bypassed_count++;
     }
