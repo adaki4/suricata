@@ -531,7 +531,8 @@ static void HandleShutdown(DPDKThreadVars *ptv)
         if (SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt) != 0) {
             SCLogInfo("Waiting for all bypass rte_flow rules to be removed");
             while (SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt) != 0) {
-                rte_delay_us(100000);
+                SCLogInfo("rules added %d, rules remaining %d", SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt_created), SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt));
+                rte_delay_us(1000000);
             }
         }
         StatsSetUI64(ptv->tv, ptv->capture_dpdk_rules_created, SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt_created));

@@ -27,7 +27,6 @@
 #include "flow-bypass.h"
 #include "flow-private.h"
 #include "util-ebpf.h"
-#include "util-dpdk-rte-flow.h"
 #include "runmodes.h"
 
 #ifdef CAPTURE_OFFLOAD_MANAGER
@@ -122,17 +121,15 @@ static TmEcode BypassedFlowManager(ThreadVars *th_v, void *thread_data)
             StatsSyncCounters(th_v);
             return TM_ECODE_OK;
         }
-        // for (i = 0; i < FLOW_BYPASS_DELAY * 1000; i++) {
-        //     if (TmThreadsCheckFlag(th_v, THV_KILL)) {
-        //         StatsSyncCounters(th_v);
-        //         return TM_ECODE_OK;
-        //     }
-
-        //     StatsSyncCountersIfSignalled(th_v);
-        //     usleep(10000);
-        // }
+        for (i = 0; i < FLOW_BYPASS_DELAY * 100; i++) {
+            if (TmThreadsCheckFlag(th_v, THV_KILL)) {
+                StatsSyncCounters(th_v);
+                return TM_ECODE_OK;
+            }
+            StatsSyncCountersIfSignalled(th_v);
+            SleepMsec(10);
+        }
     }
-    // call the deinit function
     return TM_ECODE_OK;
 }
 

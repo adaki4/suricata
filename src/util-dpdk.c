@@ -66,10 +66,6 @@ void DPDKFreeDevice(LiveDevice *ldev)
             SCLogDebug("%s: releasing rte_flow rule handlers");
             SCFree(ldev->dpdk_vars->rte_flow_rule_handlers);
         }
-        if (ldev->dpdk_vars->bypass_mp != NULL) {
-            rte_mempool_free(ldev->dpdk_vars->bypass_mp);
-            ldev->dpdk_vars->bypass_mp = NULL;
-        }
         SCLogDebug("%s: releasing packet mempools", ldev->dev);
         DPDKDeviceResourcesDeinit(&ldev->dpdk_vars);
     }

@@ -60,6 +60,31 @@ void DPDKDeviceResourcesDeinit(DPDKDeviceResources **dpdk_vars)
             (*dpdk_vars)->pkt_mp_capa = 0;
             (*dpdk_vars)->pkt_mp_cnt = 0;
             (*dpdk_vars)->pkt_mp = NULL;
+            if ((*dpdk_vars)->rte_flow_bypass_data != NULL) {
+                if ((*dpdk_vars)->rte_flow_bypass_data->rte_bypass_mps != NULL) {
+                    for (int i = 0; i < (*dpdk_vars)->pkt_mp_cnt; i++) {
+                        if ((*dpdk_vars)->rte_flow_bypass_data->rte_bypass_mps[i] != NULL) {
+                            rte_mempool_free((*dpdk_vars)->rte_flow_bypass_data->rte_bypass_mps[i]);
+                            (*dpdk_vars)->rte_flow_bypass_data->rte_bypass_mps[i] = NULL;
+                        }
+                    }
+                    SCFree((*dpdk_vars)->rte_flow_bypass_data->rte_bypass_mps);
+                }
+                (*dpdk_vars)->rte_flow_bypass_data->rte_bypass_mps = NULL;
+
+                if ((*dpdk_vars)->rte_flow_bypass_data->rte_bypass_rings != NULL) {
+                    for (int i = 0; i < (*dpdk_vars)->pkt_mp_cnt; i++) {
+                        if ((*dpdk_vars)->rte_flow_bypass_data->rte_bypass_rings[i] != NULL) {
+                            rte_ring_free((*dpdk_vars)->rte_flow_bypass_data->rte_bypass_rings[i]);
+                            (*dpdk_vars)->rte_flow_bypass_data->rte_bypass_rings[i] = NULL;
+                        }
+                    }
+                    SCFree((*dpdk_vars)->rte_flow_bypass_data->rte_bypass_rings);
+                }
+            }
+            (*dpdk_vars)->rte_flow_bypass_data->rte_bypass_rings = NULL;
+            SCFree((*dpdk_vars)->rte_flow_bypass_data);
+            (*dpdk_vars)->rte_flow_bypass_data = NULL;
         }
         SCFree(*dpdk_vars);
         *dpdk_vars = NULL;

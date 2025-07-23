@@ -117,6 +117,11 @@
 #define RTE_ETH_LINK_MAX_STR_LEN 40
 #endif
 
+typedef struct RteFlowBypassData_ {
+    uint16_t worker_cnt;
+    struct rte_mempool **rte_bypass_mps;
+    struct rte_ring **rte_bypass_rings;
+} RteFlowBypassData;
 typedef struct {
     struct rte_mempool **pkt_mp;
     uint16_t pkt_mp_cnt;
@@ -124,8 +129,8 @@ typedef struct {
     struct rte_flow **rte_flow_rule_handlers;
     uint16_t rte_flow_rule_cnt;
     uint16_t rte_flow_rule_size;
-    struct rte_mempool *bypass_mp;
-    uint16_t port_id;;
+    RteFlowBypassData *rte_flow_bypass_data;
+    uint16_t port_id;
     SC_ATOMIC_DECLARE(int32_t, bypass_rte_flow_rule_active_cnt);
     SC_ATOMIC_DECLARE(int32_t, bypass_rte_flow_rule_active_cnt_created);
     bool can_shutdown;
