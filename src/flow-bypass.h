@@ -33,6 +33,7 @@ struct flows_stats {
 };
 
 typedef int (*BypassedCheckFunc)(ThreadVars *th_v,
+                                 uint16_t instance,
                                  struct flows_stats *bypassstats,
                                  struct timespec *curtime, void *data);
 typedef int (*BypassedCheckFuncInit)(ThreadVars *th_v,

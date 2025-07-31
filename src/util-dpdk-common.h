@@ -133,6 +133,8 @@ typedef struct {
     uint16_t port_id;
     SC_ATOMIC_DECLARE(int32_t, bypass_rte_flow_rule_active_cnt);
     SC_ATOMIC_DECLARE(int32_t, bypass_rte_flow_rule_active_cnt_created);
+    SC_ATOMIC_DECLARE(int32_t, bypass_rte_flow_rule_null);
+    SC_ATOMIC_DECLARE(int32_t, bypass_rte_flow_freed);
     bool can_shutdown;
 } DPDKDeviceResources;
 

@@ -60,7 +60,7 @@ void RteBypassMempoolFree(void *data);
 int RteFlowBypassCallback(Packet *);
 int RteFlowBypassCheckFlowInit(ThreadVars *th_v, struct timespec *curtime, void *data);
 int RteFlowBypassRuleLoad(
-        ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
+        ThreadVars *th_v, uint16_t bypassmgr_id, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
 bool RteBypassUpdate(Flow *flow, void *data, time_t tsec);
 void RteBypassFree(void *data);
 

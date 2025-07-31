@@ -1454,12 +1454,18 @@ nodist_EXTRA_fuzz_mimedecparseline_SOURCES = force-cxx-linking.cxx
 endif
 
 # default CFLAGS
+# AM_CFLAGS = ${OPTIMIZATION_CFLAGS} ${GCC_CFLAGS} ${CLANG_CFLAGS}            \
+#     ${SECCFLAGS} ${PCAP_CFLAGS} ${EXTRA_CFLAGS}								\
+#     -Wall -Wno-unused-parameter -Wmissing-prototypes -Wmissing-declarations \
+#     -Wstrict-prototypes -Wwrite-strings -Wbad-function-cast                 \
+#     -Wformat-security -Wno-format-nonliteral -Wmissing-format-attribute     \
+#     -funsigned-char
 AM_CFLAGS = ${OPTIMIZATION_CFLAGS} ${GCC_CFLAGS} ${CLANG_CFLAGS}            \
     ${SECCFLAGS} ${PCAP_CFLAGS} ${EXTRA_CFLAGS}								\
     -Wall -Wno-unused-parameter -Wmissing-prototypes -Wmissing-declarations \
     -Wstrict-prototypes -Wwrite-strings -Wbad-function-cast                 \
     -Wformat-security -Wno-format-nonliteral -Wmissing-format-attribute     \
-    -funsigned-char
+    -funsigned-char -ggdb -O0 -fno-omit-frame-pointer
 
 # different flags for different cases
 if DEBUG

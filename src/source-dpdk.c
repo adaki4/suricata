@@ -528,13 +528,27 @@ static void HandleShutdown(DPDKThreadVars *ptv)
         // If Suricata runs in peered mode, the peer threads might still want to send
         // packets to our port. Instead, we know, that we are done with the peered port, so
         // we stop it. The peered threads will stop our port.
+        // SCLogInfo("rules added %d, rules remaining %d, rules null (double check) %d, rules freed %d", 
+        //             SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt_created), 
+        //             SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt),
+        //             SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_null),
+        //             SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_freed));
         if (SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt) != 0) {
             SCLogInfo("Waiting for all bypass rte_flow rules to be removed");
             while (SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt) != 0) {
-                SCLogInfo("rules added %d, rules remaining %d", SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt_created), SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt));
+                        SCLogInfo("rules added %d, rules remaining %d, rules null (double check) %d, rules freed %d", 
+                    SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt_created), 
+                    SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt),
+                    SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_null),
+                    SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_freed));
                 rte_delay_us(1000000);
             }
         }
+        SCLogInfo("rules added %d, rules remaining %d, rules null (double check) %d, rules freed %d", 
+                    SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt_created), 
+                    SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt),
+                    SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_null),
+                    SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_freed));
         StatsSetUI64(ptv->tv, ptv->capture_dpdk_rules_created, SC_ATOMIC_GET(ptv->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt_created));
         DPDKDumpCounters(ptv);
         if (ptv->copy_mode == DPDK_COPY_MODE_TAP || ptv->copy_mode == DPDK_COPY_MODE_IPS) {

@@ -48,6 +48,7 @@ typedef struct BypassedFlowManagerThreadData_ {
     uint16_t flow_bypassed_cnt_clo;
     uint16_t flow_bypassed_pkts;
     uint16_t flow_bypassed_bytes;
+    uint16_t instance;
 } BypassedFlowManagerThreadData;
 
 #define BYPASSFUNCMAX   4
@@ -68,6 +69,8 @@ typedef struct BypassedUpdateFuncItem_ {
 
 int g_bypassed_update_max_index = 0;
 BypassedUpdateFuncItem updatefunclist[BYPASSFUNCMAX];
+
+SC_ATOMIC_DECLARE(uint32_t, bypassmgr_cnt);
 
 static TmEcode BypassedFlowManager(ThreadVars *th_v, void *thread_data)
 {
@@ -109,7 +112,7 @@ static TmEcode BypassedFlowManager(ThreadVars *th_v, void *thread_data)
             struct flows_stats bypassstats = { 0, 0, 0};
             if (bypassedfunclist[i].Func == NULL)
                 continue;
-            tcount = bypassedfunclist[i].Func(th_v, &bypassstats, &curtime, bypassedfunclist[i].data);
+            tcount = bypassedfunclist[i].Func(th_v, ftd->instance, &bypassstats, &curtime, bypassedfunclist[i].data);
             if (tcount) {
                 StatsAddUI64(th_v, ftd->flow_bypassed_cnt_clo, (uint64_t)bypassstats.count);
             }
@@ -144,7 +147,8 @@ static TmEcode BypassedFlowManagerThreadInit(ThreadVars *t, const void *initdata
     ftd->flow_bypassed_cnt_clo = StatsRegisterCounter("flow_bypassed.closed", t);
     ftd->flow_bypassed_pkts = StatsRegisterCounter("flow_bypassed.pkts", t);
     ftd->flow_bypassed_bytes = StatsRegisterCounter("flow_bypassed.bytes", t);
-
+    ftd->instance = SC_ATOMIC_ADD(bypassmgr_cnt, 1);
+    SCLogInfo("bypass manager id%d", ftd->instance);
     return TM_ECODE_OK;
 }
 
@@ -192,19 +196,22 @@ void BypassedFlowManagerThreadSpawn(void)
 {
 #ifdef CAPTURE_OFFLOAD_MANAGER
 
-    ThreadVars *tv_flowmgr = NULL;
-    tv_flowmgr = TmThreadCreateMgmtThreadByName(thread_name_flow_bypass,
+    for (int i = 0; i < 2; i++) {
+        char name[TM_THREAD_NAME_MAX];
+        snprintf(name, sizeof(name), "%s#%02u", thread_name_flow_bypass, i+1);
+        ThreadVars *tv_flowmgr  = TmThreadCreateMgmtThreadByName(thread_name_flow_bypass,
             "BypassedFlowManager", 0);
-    BUG_ON(tv_flowmgr == NULL);
+        BUG_ON(tv_flowmgr == NULL);
 
-    if (tv_flowmgr == NULL) {
-        printf("ERROR: TmThreadsCreate failed\n");
-        exit(1);
-    }
-    if (TmThreadSpawn(tv_flowmgr) != TM_ECODE_OK) {
-        printf("ERROR: TmThreadSpawn failed\n");
-        exit(1);
-    }
+        if (tv_flowmgr == NULL) {
+            printf("ERROR: TmThreadsCreate failed\n");
+        }
+
+        if (TmThreadSpawn(tv_flowmgr) != TM_ECODE_OK) {
+            printf("ERROR: TmThreadSpawn failed\n");
+        }
+    }   
+
 #endif
 }
 
