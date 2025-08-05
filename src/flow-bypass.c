@@ -130,7 +130,7 @@ static TmEcode BypassedFlowManager(ThreadVars *th_v, void *thread_data)
                 return TM_ECODE_OK;
             }
             StatsSyncCountersIfSignalled(th_v);
-            SleepMsec(10);
+            SleepMsec(1);
         }
     }
     return TM_ECODE_OK;
@@ -199,7 +199,7 @@ void BypassedFlowManagerThreadSpawn(void)
     for (int i = 0; i < 2; i++) {
         char name[TM_THREAD_NAME_MAX];
         snprintf(name, sizeof(name), "%s#%02u", thread_name_flow_bypass, i+1);
-        ThreadVars *tv_flowmgr  = TmThreadCreateMgmtThreadByName(thread_name_flow_bypass,
+        ThreadVars *tv_flowmgr  = TmThreadCreateMgmtThreadByName(name,
             "BypassedFlowManager", 0);
         BUG_ON(tv_flowmgr == NULL);
 

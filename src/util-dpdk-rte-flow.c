@@ -453,12 +453,14 @@ int RteBypassInit(DPDKDeviceResources *dpdk_resources, uint32_t bypass_ring_size
         char ring_name[64];
         snprintf(mempool_name, sizeof(mempool_name), "bypass_mp_%d", i);
         snprintf(ring_name, sizeof(ring_name), "bypass_ring_%d", i);
+        //change socket id for worker socket, not socket running setup
         struct rte_ring *rte_bypass_ring = rte_ring_create(
                 ring_name, bypass_ring_size, rte_socket_id(), RING_F_SC_DEQ | RING_F_SP_ENQ);
         if (rte_bypass_ring == NULL) {
             SCLogError("%s: rte_ring_create failed with code %d (ring: %s): %s", port_name,
                     rte_errno, ring_name, rte_strerror(rte_errno));
         }
+        //change socket id for worker socket, not socket running setup
         struct rte_mempool *rte_bypass_mempool = rte_mempool_create(mempool_name, mempool_size,
                 sizeof(FlowKey), MempoolCacheSizeCalculate(mempool_size), 0, NULL, NULL, NULL, NULL,
                 rte_socket_id(), RTE_MEMPOOL_F_SP_PUT | RTE_MEMPOOL_F_SC_GET);
@@ -567,16 +569,16 @@ static int RteFlowBypassRuleCreate(
     action[1].type = RTE_FLOW_ACTION_TYPE_DROP;
     action[2].type = RTE_FLOW_ACTION_TYPE_END;
 
-    int retval = rte_flow_validate(port_id, &attr, items, action, &flow_error);
-    if (retval != 0) {
-        SCLogError("rte_flow bypass rule validation error: %s, errmsg: %s, bypassing flow locally", rte_strerror(-retval),
-                flow_error.message);
-        SCReturnInt(retval);
-    }
+    // int retval = rte_flow_validate(port_id, &attr, items, action, &flow_error);
+    // if (retval != 0) {
+    //     SCLogError("rte_flow bypass rule validation error: %s, errmsg: %s, bypassing flow locally", rte_strerror(-retval),
+    //             flow_error.message);
+    //     SCReturnInt(retval);
+    // }
 
     *flow_handler = rte_flow_create(port_id, &attr, items, action, &flow_error);
-    if (flow_handler == NULL) {
-        SCLogError("rte_flow bypass rule creation error: %s, bypassing flow locally", flow_error.message);
+    if (*flow_handler == NULL) {
+        //SCLogWarning("rte_flow bypass rule creation error: %s, bypassing flow locally", flow_error.message);
         SCReturnInt(-1);
     }
     SCReturnInt(0);
@@ -624,10 +626,10 @@ int RteFlowBypassRuleLoad(
     /* Initialize the reusable part of rte_flow rules */
     items[L2_INDEX].type = RTE_FLOW_ITEM_TYPE_ETH;
     items[END_INDEX].type = RTE_FLOW_ITEM_TYPE_END;
-    int half_worker = (rte_flow_bypass_data->worker_cnt / 2);
-    int min_id = bypass_mgr_id == 0 ? 0 : half_worker;
-    int max_id = bypass_mgr_id == 0 ? half_worker : rte_flow_bypass_data->worker_cnt;
-    for (int wrk_id = min_id; wrk_id < max_id; wrk_id++) {
+    // int half_worker = (rte_flow_bypass_data->worker_cnt / 2);
+    // int min_id = bypass_mgr_id == 0 ? 0 : half_worker;
+    // int max_id = bypass_mgr_id == 0 ? half_worker : rte_flow_bypass_data->worker_cnt;
+    for (int wrk_id = bypass_mgr_id; wrk_id < rte_flow_bypass_data->worker_cnt; wrk_id = wrk_id + 2) {
         if (unlikely(suricata_ctl_flags != 0)) {
             SCReturn(0);
         }
@@ -646,7 +648,8 @@ int RteFlowBypassRuleLoad(
 
             FlowKey *flow_key = ring_data[i];
             uint32_t flow_hash = FlowKeyGetHash(flow_key);
-            Flow *flow = FlowGetExistingFlowFromHash(flow_key, flow_hash);
+            // Flow *flow = FlowGetExistingFlowFromHash(flow_key, flow_hash);
+            Flow *flow = FlowGetFromFlowKey(flow_key, curtime, flow_hash);            
             if (flow == NULL) {
                 rte_mempool_put(rte_flow_bypass_data->rte_bypass_mps[wrk_id], flow_key);
                 SCLogWarning("dpdk rte_flow bypass: Flow not found when creating rule for bypass");
@@ -782,7 +785,7 @@ int RteFlowBypassRuleLoad(
                     RteFlowSetFlowBypassInfo(flow, src_rule_handler, dst_rule_handler, inet_family);
             if (retval != 0) {
                 SC_ATOMIC_ADD(flow->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt, 1);
-                // SC_ATOMIC_ADD(flow->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt_created, 1);
+                SC_ATOMIC_ADD(flow->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt_created, 1);
                 bypassstats->count++;
                 success_count++;
             }
@@ -904,6 +907,7 @@ static int RteFlowSetFlowBypassInfo(
         }
         /*Flow has already been taken care of by worker, the rules are deleted*/
         if (flow_handler_info->src_handler != NULL || flow_handler_info->dst_handler != NULL) {
+            SCLogInfo("Rule for flow alread created");
             SCReturnInt(0);
         }
         flow_handler_info->flow = flow;
@@ -959,10 +963,10 @@ int RteFlowBypassCallback(Packet *p)
     if (p->flow == NULL) {
         SCReturnInt(0);
     }
-    if (SC_ATOMIC_GET(p->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt_created) >= 32768) {
-        SCLogInfo("%d", SC_ATOMIC_GET(p->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt));
-        SCReturnInt(0);
-    }
+    // if (SC_ATOMIC_GET(p->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt_created) >= 32768) {
+    //     SCLogInfo("%d", SC_ATOMIC_GET(p->livedev->dpdk_vars->bypass_rte_flow_rule_active_cnt));
+    //     SCReturnInt(0);
+    // }
     /* Only bypass TCP and UDP */
     if (!(PacketIsTCP(p) || PacketIsUDP(p))) {
         SCReturnInt(0);
@@ -973,7 +977,6 @@ int RteFlowBypassCallback(Packet *p)
         SCLogError("Memory allocation for rte_flow bypass data failed");
         SCReturnInt(0);
     }
-
     if (PacketIsIPv4(p)) {
         flow_key->src.family = AF_INET;
         flow_key->src.address.address_un_data32[0] = (GET_IPV4_SRC_ADDR_U32(p));
@@ -985,11 +988,7 @@ int RteFlowBypassCallback(Packet *p)
         flow_key->dst.family = AF_INET6;
         rte_memcpy(flow_key->dst.address.address_un_data8, GET_IPV6_DST_ADDR(p), 16 * sizeof(uint8_t));
     }
-    if (p->proto == IPPROTO_TCP) {
-        flow_key->proto = IPPROTO_TCP;
-    } else {
-        flow_key->proto = IPPROTO_UDP;
-    }
+    flow_key->proto = p->proto;
     flow_key->sp = p->sp;
     flow_key->dp = p->dp;
     flow_key->livedev_id = p->livedev->id;
