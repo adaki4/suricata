@@ -209,8 +209,10 @@ static int DevicePostStartPMDSpecificActions(
         ixgbeDeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
     else if (strcmp(driver_name, "net_ice") == 0)
         iceDeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
-    else if (strcmp(driver_name, "mlx5_pci") == 0)
+    else if (strcmp(driver_name, "mlx5_pci") == 0) {
         mlx5DeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
+        RteFlowCreateInitBypassRules(ptv->port_id);
+    }
 
     if ((strcmp(driver_name, "mlx5_pci") == 0 || strcmp(driver_name, "net_ice") == 0 ||
                 strcmp(driver_name, "net_i40e") == 0)) {

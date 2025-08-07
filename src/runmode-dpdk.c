@@ -1392,7 +1392,7 @@ static void PortConfSetRSSConf(const DPDKIfaceConfig *iconf,
                         iconf->iface, port_conf->rx_adv_conf.rss_conf.rss_hf, rss_hf_tmp);
                 port_conf->rx_adv_conf.rss_conf.rss_hf = rss_hf_tmp;
             }
-            port_conf->rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
+            //port_conf->rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
         } else {
             SCLogConfig("%s: RSS not enabled", iconf->iface);
             port_conf->rx_adv_conf.rss_conf.rss_key = NULL;

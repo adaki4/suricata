@@ -56,6 +56,7 @@ uint64_t RteFlowFilteredPacketsQuery(struct rte_flow **rte_flow_rules, uint16_t 
         char *device_name, int port_id, uint64_t *filtered_packets);
 int RteBypassInit(DPDKDeviceResources *dpdk_resources, uint32_t bypass_ring_size,
         const char *port_name, int port_id, uint16_t nb_rx_queues);
+int RteFlowCreateInitBypassRules(uint16_t port_id);
 void RteBypassMempoolFree(void *data);
 int RteFlowBypassCallback(Packet *);
 int RteFlowBypassCheckFlowInit(ThreadVars *th_v, struct timespec *curtime, void *data);

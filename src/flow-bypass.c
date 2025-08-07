@@ -130,7 +130,7 @@ static TmEcode BypassedFlowManager(ThreadVars *th_v, void *thread_data)
                 return TM_ECODE_OK;
             }
             StatsSyncCountersIfSignalled(th_v);
-            SleepMsec(1);
+            SleepMsec(10);
         }
     }
     return TM_ECODE_OK;
@@ -196,7 +196,7 @@ void BypassedFlowManagerThreadSpawn(void)
 {
 #ifdef CAPTURE_OFFLOAD_MANAGER
 
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 1; i++) {
         char name[TM_THREAD_NAME_MAX];
         snprintf(name, sizeof(name), "%s#%02u", thread_name_flow_bypass, i+1);
         ThreadVars *tv_flowmgr  = TmThreadCreateMgmtThreadByName(name,
