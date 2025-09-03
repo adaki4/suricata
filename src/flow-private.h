@@ -37,8 +37,7 @@
 #define FLOW_EMERGENCY   0x01
 
 /** Flow engine is in shutdown mode. This means it will not accept new flows
- *  and will only process existing flows.
- * todo*/
+ *  and will only process existing flows. */
 #define FLOW_SHUTDOWN     0x02
 #define FLOW_SHUTDOWN_END 0x04
 
