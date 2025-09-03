@@ -246,6 +246,7 @@ static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters
         uint64_t pkts_todst = fc->todstpktcnt;
         uint64_t bytes_todst = fc->todstbytecnt;
         bool update = fc->BypassUpdate(f, fc->bypass_data, SCTIME_SECS(ts));
+        const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
         if (update || shutdown) {
             SCLogDebug("Updated flow: %" PRId64 "", FlowGetId(f));
             pkts_tosrc = fc->tosrcpktcnt - pkts_tosrc;
@@ -345,7 +346,7 @@ static void FlowManagerHashRowTimeout(FlowManagerTimeoutThread *td, Flow *f, SCT
 {
     uint32_t checked = 0;
     Flow *prev_f = NULL;
-    const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
+
     do {
         checked++;
 
@@ -357,6 +358,7 @@ static void FlowManagerHashRowTimeout(FlowManagerTimeoutThread *td, Flow *f, SCT
          * be modified when we have both the flow and hash row lock */
 
         /* timeout logic goes here */
+        const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
         if (!shutdown && !FlowManagerFlowTimeout(f, ts, next_ts, emergency)) {
             FLOWLOCK_UNLOCK(f);
             counters->flows_notimeout++;
@@ -435,7 +437,6 @@ static uint32_t FlowTimeoutHash(FlowManagerTimeoutThread *td, SCTime_t ts, const
 {
     uint32_t cnt = 0;
     const int emergency = ((SC_ATOMIC_GET(flow_flags) & FLOW_EMERGENCY));
-    const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
     const uint32_t rows_checked = hash_max - hash_min;
     uint32_t rows_skipped = 0;
     uint32_t rows_empty = 0;
@@ -449,6 +450,7 @@ static uint32_t FlowTimeoutHash(FlowManagerTimeoutThread *td, SCTime_t ts, const
 #endif
 
     const uint32_t ts_secs = (uint32_t)SCTIME_SECS(ts);
+    const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
     for (uint32_t idx = hash_min; idx < hash_max; idx+=BITS) {
         TYPE check_bits = 0;
         const uint32_t check = MIN(BITS, (hash_max - idx));
@@ -983,7 +985,6 @@ static TmEcode FlowManager(ThreadVars *th_v, void *thread_data)
             /*Pass through all flows to gather counters from bypassed flows*/
             FlowTimeoutHash(&ftd->timeout, ts, ftd->min, ftd->max, &counters);
             FlowCountersUpdate(th_v, ftd, &counters);
-            SC_ATOMIC_OR(flow_flags, FLOW_SHUTDOWN_END);
             StatsSyncCounters(&th_v->stats);
             break;
         }

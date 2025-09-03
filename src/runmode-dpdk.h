@@ -36,7 +36,6 @@ typedef struct DPDKIfaceConfigAttributes_ {
     const char *linkup_timeout;
     const char *mempool_size;
     const char *mempool_cache_size;
-    const char *bypass_ring_size;
     const char *rx_descriptors;
     const char *tx_descriptors;
     const char *copy_mode;

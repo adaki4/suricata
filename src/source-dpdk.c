@@ -87,7 +87,6 @@ TmEcode NoDPDKSupportExit(ThreadVars *tv, const void *initdata, void **data)
 
 #else /* We have DPDK support */
 
-#include "flow-private.h"
 #include "util-affinity.h"
 #include "util-dpdk.h"
 #include "util-dpdk-i40e.h"
@@ -128,6 +127,15 @@ typedef struct DPDKThreadVars_ {
     StatsCounterId capture_dpdk_tx_errs;
     StatsCounterId capture_dpdk_rte_flow_filtered;
     StatsCounterId capture_dpdk_rules_created;
+    // #ifdef CAPTURE_OFFLOAD
+    StatsCounterId capture_dpdk_rte_bypass_pkts;
+    StatsCounterId capture_dpdk_rte_bypass_rules_error;
+    StatsCounterId capture_dpdk_rte_bypass_enqueue_error;
+    StatsCounterId capture_dpdk_rte_bypass_mempool_get_error;
+    StatsCounterId capture_dpdk_rte_bypass_info_mempool_get_error;
+    StatsCounterId capture_dpdk_rte_bypass_flow_error;
+    StatsCounterId capture_dpdk_rte_bypass_query_error;
+    // #endif /* CAPTURE_OFFLOAD */
     unsigned int flags;
     uint16_t threads;
     /* for IPS */
@@ -314,7 +322,8 @@ static inline void DPDKDumpCounters(DPDKThreadVars *ptv)
                             ptv->livedev->dpdk_vars->drop_filter->rule_cnt, ptv->livedev->dev,
                             ptv->port_id);
             if (retval == 0)
-                StatsCounterSetI64(&ptv->tv, ptv->capture_dpdk_rte_flow_filtered, filtered_packets);
+                StatsCounterSetI64(
+                        &ptv->tv->stats, ptv->capture_dpdk_rte_flow_filtered, filtered_packets);
         }
 
         StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_packets,
@@ -329,6 +338,23 @@ static inline void DPDKDumpCounters(DPDKThreadVars *ptv)
         StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_tx_errs, eth_stats.oerrors);
         SC_ATOMIC_SET(
                 ptv->livedev->drop, eth_stats.imissed + eth_stats.ierrors + eth_stats.rx_nombuf);
+        // #ifdef CAPTURE_OFFLOAD
+        RteFlowBypassData *rte_flow_bypass_data = ptv->livedev->dpdk_vars->rte_flow_bypass_data;
+        StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_pkts,
+                SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_pkts));
+        StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_rules_error,
+                SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_error));
+        StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_enqueue_error,
+                SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_enqueue_error));
+        StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_info_mempool_get_error,
+                SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_info_mempool_get_error));
+        StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_mempool_get_error,
+                SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_mempool_get_error));
+        StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_flow_error,
+                SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_flow_error));
+        StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_query_error,
+                SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_query_error));
+        // #endif /* CAPTURE_OFFLOAD */
     } else {
         StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_packets, ptv->pkts);
     }
@@ -575,16 +601,16 @@ static void HandleShutdown(DPDKThreadVars *ptv)
                 0) {
             SCLogInfo("Waiting for all bypass rte_flow rules to be removed");
             while (SC_ATOMIC_GET(ptv->livedev->dpdk_vars->rte_flow_bypass_data
-                                         ->rte_bypass_rules_active) != 0) {
+                                   ->rte_bypass_rules_active) != 0) {
                 rte_delay_us(100000);
                 SCLogInfo("rules added %d, rules left to remove %d",
                         SC_ATOMIC_GET(ptv->livedev->dpdk_vars->rte_flow_bypass_data
-                                              ->rte_bypass_rules_created),
+                                        ->rte_bypass_rules_created),
                         SC_ATOMIC_GET(ptv->livedev->dpdk_vars->rte_flow_bypass_data
-                                              ->rte_bypass_rules_active));
+                                        ->rte_bypass_rules_active));
             }
         }
-        StatsSetUI64(ptv->tv, ptv->capture_dpdk_rules_created,
+        StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rules_created,
                 SC_ATOMIC_GET(
                         ptv->livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_created));
         DPDKDumpCounters(ptv);
@@ -698,9 +724,25 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
     ptv->capture_dpdk_rx_no_mbufs = StatsRegisterCounter("capture.dpdk.no_mbufs", &ptv->tv->stats);
     ptv->capture_dpdk_ierrors = StatsRegisterCounter("capture.dpdk.ierrors", &ptv->tv->stats);
     ptv->capture_dpdk_rte_flow_filtered =
-            StatsRegisterCounter("capture.dpdk.rte_flow_filtered", &ptv->tv);
-    ptv->capture_dpdk_rules_created = StatsRegisterCounter("capture.dpdk.rules_created", ptv->tv);
-
+            StatsRegisterCounter("capture.dpdk.rte_flow_filtered", &ptv->tv->stats);
+    // #ifdef CAPTURE_OFFLOAD
+    ptv->capture_dpdk_rules_created =
+            StatsRegisterCounter("capture.dpdk.rte_rules_created", &ptv->tv->stats);
+    ptv->capture_dpdk_rte_bypass_pkts =
+            StatsRegisterCounter("capture.dpdk.bypass_pkts", &ptv->tv->stats);
+    ptv->capture_dpdk_rte_bypass_rules_error =
+            StatsRegisterCounter("capture.dpdk.bypass_rte_rules_error", &ptv->tv->stats);
+    ptv->capture_dpdk_rte_bypass_enqueue_error =
+            StatsRegisterCounter("capture.dpdk.bypass_rte_ring_enqueue_error", &ptv->tv->stats);
+    ptv->capture_dpdk_rte_bypass_mempool_get_error =
+            StatsRegisterCounter("capture.dpdk.bypass_mempool_get_error", &ptv->tv->stats);
+    ptv->capture_dpdk_rte_bypass_info_mempool_get_error =
+            StatsRegisterCounter("capture.dpdk.bypass_mempool_info_get_error", &ptv->tv->stats);
+    ptv->capture_dpdk_rte_bypass_flow_error =
+            StatsRegisterCounter("capture.dpdk.bypass_flow_error", &ptv->tv->stats);
+    ptv->capture_dpdk_rte_bypass_query_error =
+            StatsRegisterCounter("capture.dpdk.bypass_stat_query_errors", &ptv->tv->stats);
+    // #endif /* CAPTURE_OFFLOAD */
     ptv->copy_mode = dpdk_config->copy_mode;
     ptv->checksum_mode = dpdk_config->checksum_mode;
 
