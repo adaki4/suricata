@@ -844,7 +844,7 @@ dpdk:
       # If the pattern is invalid or unsupported, Suricata will not start.
       # Example: "rule: pattern eth / ipv4 src is 16.0.25.0 / udp / end"
       #          "rule: pattern eth / ipv4 dst is 19.1.2.15 / tcp / end" 
-      drop-filter: none 
+      drop-filter: none
 
     - interface: default
       threads: auto
