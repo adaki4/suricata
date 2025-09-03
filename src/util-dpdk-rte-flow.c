@@ -435,7 +435,7 @@ int RteBypassInit(DPDKDeviceResources *dpdk_resources, uint32_t bypass_ring_size
     struct rte_ring *bypass_ring =
             rte_ring_create(RTE_BYPASS_RING_NAME, bypass_ring_size, rte_socket_id(), RING_F_SC_DEQ);
     if (bypass_ring == NULL) {
-        SCLogError("%s: rte_ring_create failed with code %d (ring: %s): %s", port_name, rte_errno,
+        SCLogError("%s: rte_ring_create failed with (ring: %s): %s", port_name,
                 RTE_BYPASS_RING_NAME, rte_strerror(rte_errno));
         SCReturnInt(-1);
     }
@@ -446,8 +446,8 @@ int RteBypassInit(DPDKDeviceResources *dpdk_resources, uint32_t bypass_ring_size
             sizeof(FlowKey), MempoolCacheSizeCalculate(mempool_size), 0, NULL, NULL, NULL, NULL,
             rte_socket_id(), 0);
     if (bypass_mp == NULL) {
-        SCLogError("%s: rte_mempool_create failed with code %d (mempool: %s): %s", port_name,
-                rte_errno, RTE_BYPASS_MEMPOOL_NAME, rte_strerror(rte_errno));
+        SCLogError("%s: rte_mempool_create failed (mempool: %s): %s", port_name,
+                RTE_BYPASS_MEMPOOL_NAME, rte_strerror(rte_errno));
         SCReturnInt(-1);
     }
     BypassedFlowManagerRegisterCheckFunc(

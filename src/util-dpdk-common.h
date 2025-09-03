@@ -133,7 +133,6 @@ typedef struct {
     uint16_t rte_flow_rule_size;
     RteFlowBypassData *rte_flow_bypass_data;
     uint16_t port_id;
-    ;
 } DPDKDeviceResources;
 
 int DPDKDeviceResourcesInit(DPDKDeviceResources **dpdk_vars, uint16_t mp_cnt);

@@ -1640,7 +1640,6 @@ static int DeviceConfigureIPS(DPDKIfaceConfig *iconf)
     SCReturnInt(0);
 }
 
-// if possible, configure dynamic bypass with rte_flow -> can return error, ASK ABOUT THIS
 static int DeviceConfigureDynamicBypass(
         DPDKIfaceConfig *iconf, const struct rte_eth_dev_info *dev_info)
 {
@@ -1651,12 +1650,7 @@ static int DeviceConfigureDynamicBypass(
         retval = RteBypassInit(
                 iconf->pkt_mempools, iconf->bypass_ring_size, iconf->iface, iconf->port_id);
     }
-    if (retval < 0) {
-        SCLogError(
-                "%s: failed to configure dynamic bypass: %s", iconf->iface, rte_strerror(-retval));
-        SCReturnInt(retval);
-    }
-    SCReturnInt(0);
+    SCReturnInt(retval);
 }
 /**
  * Function verifies changes in e.g. device info after configuration has
