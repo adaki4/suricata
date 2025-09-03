@@ -831,7 +831,9 @@ dpdk:
       # If the pattern is invalid or unsupported, Suricata will not start.
       # Example: "rule: pattern eth / ipv4 src is 16.0.25.0 / udp / end"
       #          "rule: pattern eth / ipv4 dst is 19.1.2.15 / tcp / end" 
-      drop-filter: none 
+      drop-filter: none
+      # Size of rte_ring responsible for passing flow bypass information from workers to the bypass-manager thread.
+      bypass-ring-size: 16384
 
     - interface: default
       threads: auto

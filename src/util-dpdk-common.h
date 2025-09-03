@@ -118,10 +118,17 @@
 #endif
 
 typedef struct RteFlowBypassData_ {
+    struct rte_mempool *bypass_info_mp;
     struct rte_mempool *bypass_mp;
     struct rte_ring *bypass_ring;
-    SC_ATOMIC_DECLARE(int32_t, rte_bypass_rules_active);
-    SC_ATOMIC_DECLARE(int32_t, rte_bypass_rules_created);
+    SC_ATOMIC_DECLARE(uint16_t, rte_bypass_rules_active);
+    SC_ATOMIC_DECLARE(uint16_t, rte_bypass_rules_created);
+    SC_ATOMIC_DECLARE(uint16_t, rte_bypass_rules_error);
+    SC_ATOMIC_DECLARE(uint16_t, rte_bypass_enqueue_error);
+    SC_ATOMIC_DECLARE(uint16_t, rte_bypass_mempool_get_error);
+    SC_ATOMIC_DECLARE(uint16_t, rte_bypass_info_mempool_get_error);
+    SC_ATOMIC_DECLARE(uint16_t, rte_bypass_flow_error);
+    SC_ATOMIC_DECLARE(uint16_t, rte_bypass_query_error);
 } RteFlowBypassData;
 
 typedef struct {
@@ -133,7 +140,6 @@ typedef struct {
     uint16_t rte_flow_rule_size;
     RteFlowBypassData *rte_flow_bypass_data;
     uint16_t port_id;
-    ;
 } DPDKDeviceResources;
 
 int DPDKDeviceResourcesInit(DPDKDeviceResources **dpdk_vars, uint16_t mp_cnt);
