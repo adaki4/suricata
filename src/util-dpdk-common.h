@@ -26,7 +26,6 @@
 
 #ifdef HAVE_DPDK
 
-#include "util-dpdk-rte-flow.h"
 #include <rte_eal.h>
 #include <rte_ethdev.h>
 #ifdef HAVE_DPDK_BOND
@@ -117,6 +116,13 @@
 #if RTE_VERSION < RTE_VERSION_NUM(20, 11, 0, 0)
 #define RTE_ETH_LINK_MAX_STR_LEN 40
 #endif
+
+typedef struct RteFlowRuleStorage_ {
+    uint32_t rule_cnt;
+    uint32_t rule_size;
+    char **rules;
+    struct rte_flow **rule_handlers;
+} RteFlowRuleStorage;
 
 typedef struct RteFlowBypassData_ {
     struct rte_mempool *bypass_info_mp;
