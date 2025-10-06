@@ -36,10 +36,10 @@
 #ifdef HAVE_DPDK
 
 #include "conf.h"
-#include "util-dpdk.h"
 #include "flow-bypass.h"
 #include "flow-hash.h"
-
+#include "util-dpdk.h"
+#include "util-dpdk-rte-flow-structs.h"
 
 void RteFlowRuleStorageFree(RteFlowRuleStorage *rule_storage);
 int ConfigLoadRteFlowRules(
