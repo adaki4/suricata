@@ -47,8 +47,7 @@ int ConfigLoadRteFlowRules(
 int RteFlowRulesCreate(uint16_t port_id, RteFlowRuleStorage *rule_storage, const char *driver_name);
 uint64_t RteFlowFilteredPacketsQuery(
         struct rte_flow **rules, uint32_t rule_count, const char *device_name, int port_id);
-int RteBypassInit(DPDKIfaceConfig *iconf);
-void RteBypassMempoolFree(void *data);
+int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name);
 int RteFlowBypassCallback(Packet *);
 int RteFlowBypassCheckFlowInit(ThreadVars *th_v, struct timespec *curtime, void *data);
 int RteFlowBypassRuleLoad(

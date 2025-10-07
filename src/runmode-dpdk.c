@@ -1646,7 +1646,7 @@ static int DeviceConfigureDynamicBypass(
     const char *driver_name = dev_info->driver_name;
     int retval = 0;
     if ((strcmp(driver_name, "net_ice") == 0) || strcmp(driver_name, "mlx5_pci") == 0) {
-        retval = RteBypassInit(iconf);
+        retval = RteBypassInit(iconf, driver_name);
     }
     SCReturnInt(retval);
 }
