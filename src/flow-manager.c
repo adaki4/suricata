@@ -1102,6 +1102,8 @@ static TmEcode FlowRecyclerThreadDeinit(ThreadVars *t, void *data)
     return TM_ECODE_OK;
 }
 
+uint64_t global_rec_counter = 0;
+
 static void Recycler(ThreadVars *tv, FlowRecyclerThreadData *ftd, Flow *f)
 {
     FLOWLOCK_WRLOCK(f);
@@ -1109,6 +1111,28 @@ static void Recycler(ThreadVars *tv, FlowRecyclerThreadData *ftd, Flow *f)
     (void)OutputFlowLog(tv, ftd->output_thread_data, f);
 
     FlowEndCountersUpdate(tv, &ftd->fec, f);
+    // if (FlowIsBypassed(f)) {
+    //     // clang-format off
+    //     // FlowTimeoutCounters *counters = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, };
+    //     // clang-format o
+    //     FlowBypassInfo *fc = FlowGetStorageById(f, GetFlowBypassInfoID());
+    //     if (fc != NULL && fc->BypassFree) {
+    //         uint64_t pkts_tosrc = fc->tosrcpktcnt;
+    //         uint64_t bytes_tosrc = fc->tosrcbytecnt;
+    //         uint64_t pkts_todst = fc->todstpktcnt;
+    //         uint64_t bytes_todst = fc->todstbytecnt;
+    //         global_rec_counter++;
+    //         SCLogInfo("%i rec c", global_rec_counter);
+    //         fc->BypassFree(fc->bypass_data);
+    //         if (f->livedev) {
+    //             SC_ATOMIC_ADD(f->livedev->bypassed,
+    //                     pkts_tosrc + pkts_todst);
+    //         }
+    //         // counters->bypassed_pkts += pkts_tosrc + pkts_todst;
+    //         // counters->bypassed_bytes += bytes_tosrc + bytes_todst;
+
+    //     }
+    // }
     if (f->proto == IPPROTO_TCP && f->protoctx != NULL) {
         StatsCounterDecr(&tv->stats, ftd->counter_tcp_active_sessions);
     }
@@ -1117,6 +1141,7 @@ static void Recycler(ThreadVars *tv, FlowRecyclerThreadData *ftd, Flow *f)
     FlowClearMemory(f, f->protomap);
     FLOWLOCK_UNLOCK(f);
 }
+
 
 /** \brief Thread that manages timed out flows.
  *
