@@ -49,14 +49,20 @@ typedef struct RteFlowBypassData_ {
     struct rte_mempool *bypass_mp;
     struct rte_ring *bypass_ring;
     uint32_t rte_bypass_rule_capacity;
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_active);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_created);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_error);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_enqueue_error);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_mempool_get_error);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_info_mempool_get_error);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flow_error);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_created);
+    // SC_ATOMIC_DECLARE(uint32_t, rte_bypass_mempool_get_error);
+    uint32_t rte_bypass_mempool_get_error;
+    uint32_t rte_bypass_info_mempool_get_error;
+    uint32_t rte_bypass_flow_error;
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_query_error);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_active);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_enqueue_error);
+
+    //DEBUG
+    uint32_t recycler_counter;
+    uint32_t recylcer_last;
+
 } RteFlowBypassData;
 
 #endif /* HAVE_DPDK */

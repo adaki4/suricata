@@ -53,11 +53,11 @@
 #define COUNT_ACTION_ID        1
 
 #if RTE_VERSION >= RTE_VERSION_NUM(21, 11, 0, 0)
+#define RTE_JUMP_GROUP 1
 #define INITIAL_RTE_FLOW_RULE_COUNT_CAPACITY 5
 #define RTE_BYPASS_RING_NAME                 "rte_bypass_ring"
 #define RTE_BYPASS_MEMPOOL_NAME              "rte_bypass_mempool"
 #define RTE_BYPASS_INFO_MEMPOOL_NAME         "rte_bypass_info_mempool"
-#define RTE_BYPASS_INFO_MEMPOOL_SIZE         32768
 
 static int RteFlowRuleStorageInit(RteFlowRuleStorage *);
 static int RteFlowRuleStorageAddRule(RteFlowRuleStorage *, const char *);
@@ -112,6 +112,34 @@ static int DeviceCheckDropFilterLimits(
     return 0;
 }
 
+static void RteFlowDropFilterInitJumpRule(uint16_t port_id)
+{
+    struct rte_flow_error flow_error = { 0 };
+    struct rte_flow_attr attr = { 0 };
+    struct rte_flow_item pattern[] = { { 0 } };
+    struct rte_flow_action action[] = { { 0 }, { 0 }, { 0 } };  
+
+    uint32_t jump_group = RTE_JUMP_GROUP;
+    
+    attr.ingress = 1;
+    attr.priority = 0;
+    attr.group = 0;
+
+    pattern[0].type = RTE_FLOW_ITEM_TYPE_END;
+
+    struct rte_flow_action_jump jump = {
+        .group = jump_group,
+    };
+    action[0].type = RTE_FLOW_ACTION_TYPE_JUMP;
+    action[0].conf = &jump;
+
+
+    struct rte_flow *flow_handler = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
+    if (flow_handler == NULL) {
+        SCLogError("Error when creating rte_flow jump rule  %s", flow_error.message);
+    } 
+}
+
 /**
  * \brief Initializes the attributes of rte_flow rules
  *
@@ -122,7 +150,7 @@ static void RteFlowDropFilterInitAttr(const char *driver_name, struct rte_flow_a
 {
     attr->ingress = 1;
     attr->priority = 0;
-    attr->group = 0;
+    attr->group = RTE_JUMP_GROUP;
 
     /* ICE PMD has to have attribute group set to 2 on DPDK 23.11 and higher for the count action to
      * work properly */
@@ -378,6 +406,7 @@ int RteFlowRulesCreate(uint16_t port_id, RteFlowRuleStorage *rule_storage, const
         SCReturnInt(-ENOSPC);
     }
 
+    RteFlowDropFilterInitJumpRule(port_id);
     RteFlowDropFilterInitAttr(driver_name, &attr);
     RteFlowDropFilterInitAction(rule_storage, port_name, driver_name, action);
 
@@ -495,9 +524,9 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
     }
     rte_flow_bypass_data->bypass_ring = bypass_ring;
 
-    uint32_t mempool_size = (iconf->bypass_ring_size * 2) - 1;
-    struct rte_mempool *bypass_mp = rte_mempool_create(RTE_BYPASS_MEMPOOL_NAME, mempool_size,
-            sizeof(FlowKey), MempoolCacheSizeCalculate(mempool_size), 0, NULL, NULL, NULL, NULL,
+    uint32_t bypass_mempool_size = (iconf->bypass_ring_size * 2) - 1;
+    struct rte_mempool *bypass_mp = rte_mempool_create(RTE_BYPASS_MEMPOOL_NAME, bypass_mempool_size,
+            sizeof(FlowKey), MempoolCacheSizeCalculate(bypass_mempool_size), 0, NULL, NULL, NULL, NULL,
             rte_socket_id(), 0);
     if (bypass_mp == NULL) {
         SCLogError("%s: rte_mempool_create failed (mempool: %s): %s", port_name,
@@ -506,9 +535,12 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
     }
     rte_flow_bypass_data->bypass_mp = bypass_mp;
 
+    /* We set the bypass_info_mp size larger than the previous mempool, because objects from this 
+       mempool have longer lifespan, until flow timeouts and its entry is removed from FlowTable */
+    uint32_t bypass_info_mempool_size = (iconf->bypass_ring_size * 4) - 1;
     struct rte_mempool *bypass_info_mp = rte_mempool_create(RTE_BYPASS_INFO_MEMPOOL_NAME,
-            RTE_BYPASS_INFO_MEMPOOL_SIZE, sizeof(RteFlowHandlerToFlow),
-            MempoolCacheSizeCalculate(RTE_BYPASS_INFO_MEMPOOL_SIZE), 0, NULL, NULL, NULL, NULL,
+            bypass_info_mempool_size, sizeof(RteFlowHandlerToFlow),
+            MempoolCacheSizeCalculate(bypass_info_mempool_size), 0, NULL, NULL, NULL, NULL,
             rte_socket_id(), 0);
     if (bypass_info_mp == NULL) {
         SCLogError("%s: rte_mempool_create failed (mempool: %s): %s", port_name,
@@ -522,8 +554,19 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
 
     rte_flow_bypass_data->rte_bypass_rule_capacity =
             DeviceDecideRteFlowRulesCapacity(driver_name, iconf->drop_filter.rule_cnt);
+
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_rules_active);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_rules_created);
+    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_rules_error);
+    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_enqueue_error);
+    // SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_mempool_get_error);
+    rte_flow_bypass_data->rte_bypass_mempool_get_error = 0;
+    rte_flow_bypass_data->rte_bypass_info_mempool_get_error = 0;
+    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_query_error);
+    rte_flow_bypass_data->rte_bypass_flow_error = 0;
+    rte_flow_bypass_data->recycler_counter = 0;
+    rte_flow_bypass_data->recylcer_last = 0;
+
 
     iconf->pkt_mempools->rte_flow_bypass_data = rte_flow_bypass_data;
 
@@ -613,7 +656,7 @@ static int RteFlowBypassRuleCreate(RteFlowBypassData *rte_flow_bypass_data,
 
     attr.ingress = 1;
     attr.priority = 0;
-    attr.group = 0;
+    attr.group = RTE_JUMP_GROUP;
 
     uint32_t counter_id = COUNT_ACTION_ID;
 
@@ -822,7 +865,7 @@ int RteFlowBypassRuleLoad(
                 FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
                 FLOWLOCK_UNLOCK(flow);
             } else {
-                SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flow_error, 1);
+               rte_flow_bypass_data->rte_bypass_flow_error++;
             }
             SC_ATOMIC_SUB(rte_flow_bypass_data->rte_bypass_rules_active, 1);
             SC_ATOMIC_SUB(rte_flow_bypass_data->rte_bypass_rules_created, 1);
@@ -858,6 +901,7 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
         return false;
     }
     if (flow_handler_info->src_handler == NULL || flow_handler_info->dst_handler == NULL) {
+        SCLogInfo("rte_flow dynamic bypass: flow bypass rte_handlers are null");
         return false;
     }
     bool activity = RteFlowUpdateStats(fc, flow->livedev->dpdk_vars->port_id,
@@ -910,9 +954,8 @@ static int RteFlowSetFlowBypassInfo(
         RteFlowHandlerToFlow *flow_handler_info;
         if (rte_mempool_get(flow->livedev->dpdk_vars->rte_flow_bypass_data->bypass_info_mp,
                     (void **)&flow_handler_info) < 0) {
-            SC_ATOMIC_ADD(flow->livedev->dpdk_vars->rte_flow_bypass_data
-                                  ->rte_bypass_info_mempool_get_error,
-                    1);
+            flow->livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_info_mempool_get_error++;
+            // SCLogInfo("rte_flow bypass: rte_bypass_info_mempool_get_error");
             goto bypass_fail;
         }
         flow_handler_info->flow = flow;
@@ -931,6 +974,9 @@ static int RteFlowSetFlowBypassInfo(
 bypass_fail:;
     RteFlowBiRuleDestroy(flow->livedev->dpdk_vars->port_id, src_handler, dst_handler);
     LiveDevAddBypassFail(flow->livedev, 1, family);
+    SC_ATOMIC_SUB(flow->livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_active, 1);
+    SC_ATOMIC_SUB(flow->livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_created, 1);
+    FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
     SCReturnInt(0);
 }
 
@@ -950,14 +996,14 @@ int RteFlowBypassCallback(Packet *p)
 
     /* The tested rte_flow rule capacity of the device has been exhausted, new rules will be added
      * after bypassed flows will timeout and the existing rules are be deleted */
-    if (SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) * 2 + 1 >=
-            rte_flow_bypass_data->rte_bypass_rule_capacity) {
-        SCReturnInt(0);
-    }
+    // if (SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) * 2 + 1 >=
+    //         rte_flow_bypass_data->rte_bypass_rule_capacity) {
+    //     SCReturnInt(0);
+    // }
 
     if (rte_mempool_get(rte_flow_bypass_data->bypass_mp, (void **)&flow_key) < 0) {
         SCLogError("Memory allocation for rte_flow bypass data failed");
-        SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_mempool_get_error, 1);
+        rte_flow_bypass_data->rte_bypass_mempool_get_error++;
         SCReturnInt(0);
     }
 
