@@ -907,16 +907,16 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
 {
     RteFlowHandlerToFlow *flow_handler_info = (RteFlowHandlerToFlow *)data;
     if (flow_handler_info == NULL) {
-        SCLogError("rte_flow dynamic bypass: flow_handler_info is NULL");
+        /* Data already freed */
         return false;
     }
     FlowBypassInfo *fc = FlowGetStorageById(flow, GetFlowBypassInfoID());
     if (fc == NULL) {
-        SCLogError("rte_flow dynamic bypass: flow bypass info is NULL");
+        /* Data already freed */
         return false;
     }
     if (flow_handler_info->src_handler == NULL || flow_handler_info->dst_handler == NULL) {
-        SCLogInfo("rte_flow dynamic bypass: flow bypass rte_handlers are null");
+        /* Rules already deleted */
         return false;
     }
     bool activity = RteFlowUpdateStats(fc, flow->livedev->dpdk_vars->port_id,
@@ -931,6 +931,8 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
             flow_handler_info->dst_handler = NULL;
             SC_ATOMIC_SUB(flow_handler_info->rte_flow_bypass_data->rte_bypass_rules_active, 1);
         }
+        rte_mempool_put(flow_handler_info->livedev->dpdk_vars->rte_flow_bypass_data->bypass_info_mp,
+        flow_handler_info);
     }
     SCReturnBool(activity);
 }
@@ -938,21 +940,21 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
 void RteBypassFree(void *data)
 {
     RteFlowHandlerToFlow *flow_handler_info = (RteFlowHandlerToFlow *)data;
-    if (flow_handler_info->src_handler != NULL && flow_handler_info->dst_handler != NULL) {
-        FlowBypassInfo *fc = FlowGetStorageById(flow_handler_info->flow, GetFlowBypassInfoID());
-        if (fc == NULL) {
-            SCLogError("rte_flow dynamic bypass: flow_bypass_info is NULL");
-            return;
-        }
-        RteFlowUpdateStats(fc, flow_handler_info->flow->livedev->dpdk_vars->port_id,
-                flow_handler_info->src_handler, flow_handler_info->dst_handler);
-        RteFlowBiRuleDestroy(flow_handler_info->livedev->dpdk_vars->port_id,
-                flow_handler_info->src_handler, flow_handler_info->dst_handler);
-        flow_handler_info->src_handler = NULL;
-        flow_handler_info->dst_handler = NULL;
-        SC_ATOMIC_SUB(flow_handler_info->rte_flow_bypass_data->rte_bypass_rules_active, 1);
-    }
     if (flow_handler_info != NULL) {
+        if (flow_handler_info->src_handler != NULL && flow_handler_info->dst_handler != NULL) {
+            FlowBypassInfo *fc = FlowGetStorageById(flow_handler_info->flow, GetFlowBypassInfoID());
+            if (fc == NULL) {
+                SCLogError("rte_flow dynamic bypass: flow_bypass_info is NULL");
+                return;
+            }
+            RteFlowUpdateStats(fc, flow_handler_info->flow->livedev->dpdk_vars->port_id,
+                    flow_handler_info->src_handler, flow_handler_info->dst_handler);
+            RteFlowBiRuleDestroy(flow_handler_info->livedev->dpdk_vars->port_id,
+                    flow_handler_info->src_handler, flow_handler_info->dst_handler);
+            flow_handler_info->src_handler = NULL;
+            flow_handler_info->dst_handler = NULL;
+            SC_ATOMIC_SUB(flow_handler_info->rte_flow_bypass_data->rte_bypass_rules_active, 1);
+        }
         rte_mempool_put(flow_handler_info->livedev->dpdk_vars->rte_flow_bypass_data->bypass_info_mp,
                 flow_handler_info);
     }
