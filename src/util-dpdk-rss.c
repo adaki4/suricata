@@ -106,7 +106,7 @@ int DPDKCreateRSSFlowGeneric(
 
     attr.ingress = 1;
     attr.priority = 1;
-    attr.group = RTE_JUMP_GROUP;
+    attr.group = 0;
 
     action[0].type = RTE_FLOW_ACTION_TYPE_RSS;
     action[0].conf = &rss_conf;

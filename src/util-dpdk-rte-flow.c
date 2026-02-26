@@ -112,33 +112,33 @@ static int DeviceCheckDropFilterLimits(
     return 0;
 }
 
-static void RteFlowDropFilterInitJumpRule(uint16_t port_id)
-{
-    struct rte_flow_error flow_error = { 0 };
-    struct rte_flow_attr attr = { 0 };
-    struct rte_flow_item pattern[] = { { 0 } };
-    struct rte_flow_action action[] = { { 0 }, { 0 }, { 0 } };  
+// static void RteFlowDropFilterInitJumpRule(uint16_t port_id)
+// {
+//     struct rte_flow_error flow_error = { 0 };
+//     struct rte_flow_attr attr = { 0 };
+//     struct rte_flow_item pattern[] = { { 0 } };
+//     struct rte_flow_action action[] = { { 0 }, { 0 }, { 0 } };  
 
-    uint32_t jump_group = RTE_JUMP_GROUP;
+//     uint32_t jump_group = RTE_JUMP_GROUP;
     
-    attr.ingress = 1;
-    attr.priority = 0;
-    attr.group = 0;
+//     attr.ingress = 1;
+//     attr.priority = 0;
+//     attr.group = 0;
 
-    pattern[0].type = RTE_FLOW_ITEM_TYPE_END;
+//     pattern[0].type = RTE_FLOW_ITEM_TYPE_END;
 
-    struct rte_flow_action_jump jump = {
-        .group = jump_group,
-    };
-    action[0].type = RTE_FLOW_ACTION_TYPE_JUMP;
-    action[0].conf = &jump;
+//     struct rte_flow_action_jump jump = {
+//         .group = jump_group,
+//     };
+//     action[0].type = RTE_FLOW_ACTION_TYPE_JUMP;
+//     action[0].conf = &jump;
 
 
-    struct rte_flow *flow_handler = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
-    if (flow_handler == NULL) {
-        SCLogError("Error when creating rte_flow jump rule  %s", flow_error.message);
-    } 
-}
+//     struct rte_flow *flow_handler = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
+//     if (flow_handler == NULL) {
+//         SCLogError("Error when creating rte_flow jump rule  %s", flow_error.message);
+//     } 
+// }
 
 /**
  * \brief Initializes the attributes of rte_flow rules
@@ -150,7 +150,7 @@ static void RteFlowDropFilterInitAttr(const char *driver_name, struct rte_flow_a
 {
     attr->ingress = 1;
     attr->priority = 0;
-    attr->group = RTE_JUMP_GROUP;
+    attr->group = 0;
 
     /* ICE PMD has to have attribute group set to 2 on DPDK 23.11 and higher for the count action to
      * work properly */
@@ -406,7 +406,7 @@ int RteFlowRulesCreate(uint16_t port_id, RteFlowRuleStorage *rule_storage, const
         SCReturnInt(-ENOSPC);
     }
 
-    RteFlowDropFilterInitJumpRule(port_id);
+    // RteFlowDropFilterInitJumpRule(port_id);
     RteFlowDropFilterInitAttr(driver_name, &attr);
     RteFlowDropFilterInitAction(rule_storage, port_name, driver_name, action);
 
@@ -656,7 +656,7 @@ static int RteFlowBypassRuleCreate(RteFlowBypassData *rte_flow_bypass_data,
 
     attr.ingress = 1;
     attr.priority = 0;
-    attr.group = RTE_JUMP_GROUP;
+    attr.group = 0;
 
     uint32_t counter_id = COUNT_ACTION_ID;
 
