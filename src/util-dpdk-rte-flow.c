@@ -634,6 +634,8 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, uint16_t port_id,
         fc->tosrcbytecnt += src_bytes;
         fc->todstpktcnt += dst_packets;
         fc->todstbytecnt += dst_bytes;
+        SC_ATOMIC_ADD(flow_handler_info->rte_flow_bypass_data->rte_bypass_pkts, src_packets);
+        SC_ATOMIC_ADD(flow_handler_info->rte_flow_bypass_data->rte_bypass_pkts, dst_packets);
         SCReturnInt(1);
     }
     SCReturnInt(0);
@@ -1013,10 +1015,11 @@ int RteFlowBypassCallback(Packet *p)
 
     /* The tested rte_flow rule capacity of the device has been exhausted, new rules will be added
      * after bypassed flows will timeout and the existing rules are be deleted */
-    // if (SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) * 2 + 1 >=
-    //         rte_flow_bypass_data->rte_bypass_rule_capacity) {
-    //     SCReturnInt(0);
-    // }
+    if (SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) * 2 + 1 >=
+            rte_flow_bypass_data->rte_bypass_rule_capacity) {
+        // Check over capacity here, log it, compare it to the number of totally send flows!
+        SCReturnInt(0);
+    }
 
     if (rte_mempool_get(rte_flow_bypass_data->bypass_mp, (void **)&flow_key) < 0) {
         SCLogError("Memory allocation for rte_flow bypass data failed");
