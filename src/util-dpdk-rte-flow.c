@@ -58,7 +58,7 @@
 #define RTE_BYPASS_RING_NAME                 "rte_bypass_ring"
 #define RTE_BYPASS_MEMPOOL_NAME              "rte_bypass_mempool"
 #define RTE_BYPASS_INFO_MEMPOOL_NAME         "rte_bypass_info_mempool"
-#define RTE_BYPASS_RING_SIZE                 65536
+#define RTE_BYPASS_RING_SIZE                 65536 //131072
 
 static int RteFlowRuleStorageInit(RteFlowRuleStorage *);
 static int RteFlowRuleStorageAddRule(RteFlowRuleStorage *, const char *);
@@ -772,14 +772,15 @@ int RteFlowBypassRuleLoad(
     items[L2_INDEX].type = RTE_FLOW_ITEM_TYPE_ETH;
     items[END_INDEX].type = RTE_FLOW_ITEM_TYPE_END;
 
-    if (unlikely(suricata_ctl_flags != 0)) {
-        RteFlowBypassHandleShutdown(rte_flow_bypass_data);
-        SCReturnInt(0);
-    }
+    // if (unlikely(suricata_ctl_flags != 0)) {
+    //     RteFlowBypassHandleShutdown(rte_flow_bypass_data);
+    //     SCReturnInt(0);
+    // }
+    // SCLogInfo("sz: %i, capa: %i", rte_flow_bypass_data->bypass_ring->size, rte_flow_bypass_data->bypass_ring->capacity);
     uint32_t to_bypass_packets =
             rte_ring_dequeue_burst(bypass_ring, (void **)ring_data, ring_dequeue_num, NULL);
     for (uint16_t i = 0; i < to_bypass_packets; i++) {
-
+        // SCLogInfo("to bypass packets: %i", to_bypass_packets);
         struct rte_flow_item_ipv4 ipv4_spec = { 0 }, ipv4_mask = { 0 };
         struct rte_flow_item_ipv6 ipv6_spec = { 0 }, ipv6_mask = { 0 };
         struct rte_flow_item_tcp tcp_spec = { 0 }, tcp_mask = { 0 };
@@ -904,7 +905,7 @@ int RteFlowBypassRuleLoad(
         rte_mempool_put(bypass_mp, flow_key);
         /* If error, destroy the rule for flow in original direction and set flow state to local
          * bypass*/
-        if (retval != 0 || flow == NULL) {
+        if (retval != 0 || flow == NULL || SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) * 2 + 1 >= rte_flow_bypass_data->rte_bypass_rule_capacity) {
             RteFlowBiRuleDestroy(port_id, src_rule_handler, dst_rule_handler);
             if (flow == NULL) {
                 SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flow_error, 1);
@@ -912,16 +913,10 @@ int RteFlowBypassRuleLoad(
                 FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
                 FLOWLOCK_UNLOCK(flow);
             }
-            // SC_ATOMIC_SUB(rte_flow_bypass_data->rte_bypass_rules_active, 1);
-            // SC_ATOMIC_SUB(rte_flow_bypass_data->rte_bypass_rules_created, 1);
             continue;
         }
 
-        int inet_family;
-        if (FLOW_IS_IPV4(flow))
-            inet_family = AF_INET;
-        else
-            inet_family = AF_INET6;
+        int inet_family = FLOW_IS_IPV4(flow) ? AF_INET : AF_INET6;
 
         retval = RteFlowSetFlowBypassInfo(flow, src_rule_handler, dst_rule_handler, inet_family);
         if (retval != 0) {
@@ -963,8 +958,6 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
             flow_handler_info->dst_handler = NULL;
             SC_ATOMIC_SUB(flow_handler_info->rte_flow_bypass_data->rte_bypass_rules_active, 1);
         }
-        rte_mempool_put(flow_handler_info->livedev->dpdk_vars->rte_flow_bypass_data->bypass_info_mp,
-                flow_handler_info);
     }
     SCReturnBool(activity);
 }
@@ -973,20 +966,6 @@ void RteBypassFree(void *data)
 {
     RteFlowHandlerToFlow *flow_handler_info = (RteFlowHandlerToFlow *)data;
     if (flow_handler_info != NULL) {
-        if (flow_handler_info->src_handler != NULL && flow_handler_info->dst_handler != NULL) {
-            FlowBypassInfo *fc = FlowGetStorageById(flow_handler_info->flow, GetFlowBypassInfoID());
-            if (fc == NULL) {
-                SCLogError("rte_flow dynamic bypass: flow_bypass_info is NULL");
-                return;
-            }
-            RteFlowUpdateStats(fc, flow_handler_info->flow->livedev->dpdk_vars->port_id,
-                    flow_handler_info->src_handler, flow_handler_info->dst_handler);
-            RteFlowBiRuleDestroy(flow_handler_info->livedev->dpdk_vars->port_id,
-                    flow_handler_info->src_handler, flow_handler_info->dst_handler);
-            flow_handler_info->src_handler = NULL;
-            flow_handler_info->dst_handler = NULL;
-            SC_ATOMIC_SUB(flow_handler_info->rte_flow_bypass_data->rte_bypass_rules_active, 1);
-        }
         rte_mempool_put(flow_handler_info->livedev->dpdk_vars->rte_flow_bypass_data->bypass_info_mp,
                 flow_handler_info);
     }
@@ -1025,8 +1004,6 @@ static int RteFlowSetFlowBypassInfo(
 bypass_fail:;
     RteFlowBiRuleDestroy(flow->livedev->dpdk_vars->port_id, src_handler, dst_handler);
     LiveDevAddBypassFail(flow->livedev, 1, family);
-    // SC_ATOMIC_SUB(flow->livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_active, 1);
-    // SC_ATOMIC_SUB(flow->livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_created, 1);
     FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
     SCReturnInt(0);
 }
@@ -1044,7 +1021,9 @@ int RteFlowBypassCallback(Packet *p)
 
     FlowKey *flow_key = NULL;
     RteFlowBypassData *rte_flow_bypass_data = p->livedev->dpdk_vars->rte_flow_bypass_data;
-
+    uint32_t curr_ring_sz = rte_flow_bypass_data->bypass_ring->size -
+                      rte_flow_bypass_data->bypass_ring->capacity - 1;
+    // SCLogInfo("r_sz: %i, r_capa: %i, mp_sz %i", rte_flow_bypass_data->bypass_ring->size, rte_flow_bypass_data->bypass_ring->capacity, rte_flow_bypass_data->bypass_mp->populated_size);
     /* The tested rte_flow rule capacity of the device has been exhausted, new rules will be added
      * after bypassed flows will timeout and the existing rules are be deleted */
     if (SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) * 2 + 1 >=
@@ -1090,9 +1069,6 @@ int RteFlowBypassCallback(Packet *p)
         rte_mempool_put(rte_flow_bypass_data->bypass_mp, flow_key);
         if (retval < 0)
             SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_enqueue_error, 1);
-    } else {
-        // SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_rules_active, 1);
-        // SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_rules_created, 1);
     }
     retval = retval == 0 ? 1 : 0;
     SCReturnInt(retval);
