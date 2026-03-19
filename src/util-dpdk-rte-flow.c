@@ -53,12 +53,12 @@
 #define COUNT_ACTION_ID        1
 
 #if RTE_VERSION >= RTE_VERSION_NUM(21, 11, 0, 0)
-#define RTE_JUMP_GROUP                       2
+#define RTE_JUMP_GROUP                       1
 #define INITIAL_RTE_FLOW_RULE_COUNT_CAPACITY 5
 #define RTE_BYPASS_RING_NAME                 "rte_bypass_ring"
 #define RTE_BYPASS_MEMPOOL_NAME              "rte_bypass_mempool"
 #define RTE_BYPASS_INFO_MEMPOOL_NAME         "rte_bypass_info_mempool"
-#define RTE_BYPASS_RING_SIZE                 65536 //131072
+#define RTE_BYPASS_RING_SIZE                 65536
 
 static int RteFlowRuleStorageInit(RteFlowRuleStorage *);
 static int RteFlowRuleStorageAddRule(RteFlowRuleStorage *, const char *);
@@ -154,7 +154,7 @@ static void RteFlowDropFilterInitAttr(const char *driver_name, struct rte_flow_a
 {
     attr->ingress = 1;
     attr->priority = 0;
-    attr->group = 0;
+    attr->group = RTE_JUMP_GROUP;
 
     /* ICE PMD has to have attribute group set to 2 on DPDK 23.11 and higher for the count action to
      * work properly */
@@ -610,13 +610,13 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, uint16_t port_id,
     retval = rte_flow_query(
             port_id, src_rule_handler, &(action[0]), (void *)&query_count, &flow_error);
     if (retval != 0) {
-        // SCLogError("rte_flow dynamic bypass: count query error %s errmsg: %s",
-        //         rte_strerror(-retval), flow_error.message);
+        SCLogError("rte_flow dynamic bypass: count query error %s errmsg: %s",
+                rte_strerror(-retval), flow_error.message);
         SC_ATOMIC_ADD(flow_handler_info->rte_flow_bypass_data->rte_bypass_query_error, 1);
     };
 
-    uint32_t src_packets = query_count.hits;
-    uint32_t src_bytes = query_count.bytes;
+    uint64_t src_packets = query_count.hits;
+    uint64_t src_bytes = query_count.bytes;
 
     memset(&query_count, 0, sizeof(struct rte_flow_query_count));
     query_count.reset = 1;
@@ -630,8 +630,8 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, uint16_t port_id,
                 1);
     };
 
-    uint32_t dst_packets = query_count.hits;
-    uint32_t dst_bytes = query_count.bytes;
+    uint64_t dst_packets = query_count.hits;
+    uint64_t dst_bytes = query_count.bytes;
 
     /* Proceed only if there are new filtered packets in the flow */
     if (src_packets || dst_packets) {
@@ -685,6 +685,7 @@ static int RteFlowBypassRuleCreate(RteFlowBypassData *rte_flow_bypass_data,
     SCReturnInt(retval);
 
 rule_failed:
+    SCLogError("rte_flow dynamic bypass: create rte_flow rule error %s errmsg: %s", rte_strerror(-retval), flow_error.message);
     SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_rules_error, 1);
     SCReturnInt(retval);
 }
@@ -772,15 +773,13 @@ int RteFlowBypassRuleLoad(
     items[L2_INDEX].type = RTE_FLOW_ITEM_TYPE_ETH;
     items[END_INDEX].type = RTE_FLOW_ITEM_TYPE_END;
 
-    // if (unlikely(suricata_ctl_flags != 0)) {
-    //     RteFlowBypassHandleShutdown(rte_flow_bypass_data);
-    //     SCReturnInt(0);
-    // }
-    // SCLogInfo("sz: %i, capa: %i", rte_flow_bypass_data->bypass_ring->size, rte_flow_bypass_data->bypass_ring->capacity);
     uint32_t to_bypass_packets =
             rte_ring_dequeue_burst(bypass_ring, (void **)ring_data, ring_dequeue_num, NULL);
     for (uint16_t i = 0; i < to_bypass_packets; i++) {
-        // SCLogInfo("to bypass packets: %i", to_bypass_packets);
+        if (unlikely(suricata_ctl_flags != 0)) {
+            RteFlowBypassHandleShutdown(rte_flow_bypass_data);
+            SCReturnInt(success_count);
+        }
         struct rte_flow_item_ipv4 ipv4_spec = { 0 }, ipv4_mask = { 0 };
         struct rte_flow_item_ipv6 ipv6_spec = { 0 }, ipv6_mask = { 0 };
         struct rte_flow_item_tcp tcp_spec = { 0 }, tcp_mask = { 0 };
@@ -789,6 +788,21 @@ int RteFlowBypassRuleLoad(
 
         FlowKey *flow_key = ring_data[i];
         uint16_t port_id = flow_key->livedev->dpdk_vars->port_id;
+        uint32_t flow_hash = FlowKeyGetHash(flow_key);
+        Flow *flow = FlowGetExistingFlowFromHash(flow_key, flow_hash);
+        rte_mempool_put(bypass_mp, flow_key);
+        
+        /* If error, destroy the rule for flow in original direction and set flow state to local
+         * bypass*/
+        if (flow == NULL || SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) * 2 + 1 >= rte_flow_bypass_data->rte_bypass_rule_capacity) {
+            if (flow == NULL) {
+                SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flow_error, 1);
+            } else {
+                FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
+                FLOWLOCK_UNLOCK(flow);
+            }
+            continue;
+        }
 
         /* Create rte_flow rule for original direction */
         if (flow_key->src.family == AF_INET) {
@@ -900,19 +914,12 @@ int RteFlowBypassRuleLoad(
         struct rte_flow *dst_rule_handler = NULL;
         retval += RteFlowBypassRuleCreate(rte_flow_bypass_data, items, port_id, &dst_rule_handler);
 
-        uint32_t flow_hash = FlowKeyGetHash(flow_key);
-        Flow *flow = FlowGetExistingFlowFromHash(flow_key, flow_hash);
-        rte_mempool_put(bypass_mp, flow_key);
         /* If error, destroy the rule for flow in original direction and set flow state to local
          * bypass*/
-        if (retval != 0 || flow == NULL || SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) * 2 + 1 >= rte_flow_bypass_data->rte_bypass_rule_capacity) {
+        if (retval != 0) {
             RteFlowBiRuleDestroy(port_id, src_rule_handler, dst_rule_handler);
-            if (flow == NULL) {
-                SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flow_error, 1);
-            } else {
-                FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
-                FLOWLOCK_UNLOCK(flow);
-            }
+            FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
+            FLOWLOCK_UNLOCK(flow);
             continue;
         }
 

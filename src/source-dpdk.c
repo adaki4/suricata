@@ -354,6 +354,8 @@ static inline void DPDKDumpCounters(DPDKThreadVars *ptv)
                 SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_flow_error));
         StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_query_error,
                 SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_query_error));
+        StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rules_created,
+                SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_created));
         // #endif /* CAPTURE_OFFLOAD */
     } else {
         StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_packets, ptv->pkts);
@@ -602,17 +604,15 @@ static void HandleShutdown(DPDKThreadVars *ptv)
             SCLogInfo("Waiting for all bypass rte_flow rules to be removed");
             while (SC_ATOMIC_GET(ptv->livedev->dpdk_vars->rte_flow_bypass_data
                                    ->rte_bypass_rules_active) != 0) {
-                rte_delay_us(100000);
+                rte_delay_us(1000000);
                 SCLogInfo("rules added %d, rules left to remove %d",
                         SC_ATOMIC_GET(ptv->livedev->dpdk_vars->rte_flow_bypass_data
                                         ->rte_bypass_rules_created),
                         SC_ATOMIC_GET(ptv->livedev->dpdk_vars->rte_flow_bypass_data
                                         ->rte_bypass_rules_active));
+            DPDKDumpCounters(ptv);
             }
         }
-        StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rules_created,
-                SC_ATOMIC_GET(
-                        ptv->livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_created));
         DPDKDumpCounters(ptv);
         if (ptv->copy_mode == DPDK_COPY_MODE_TAP || ptv->copy_mode == DPDK_COPY_MODE_IPS) {
             rte_eth_dev_stop(ptv->out_port_id);
