@@ -246,9 +246,8 @@ static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters
         uint64_t pkts_todst = fc->todstpktcnt;
         uint64_t bytes_todst = fc->todstbytecnt;
         bool update = fc->BypassUpdate(f, fc->bypass_data, SCTIME_SECS(ts));
-        const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
-        if (update || shutdown) {
-            SCLogDebug("Updated flow: %" PRId64 "", FlowGetId(f));
+        if (update) {
+            SCLogDebug("Updated flow: %" PRIu64 "", FlowGetId(f));
             pkts_tosrc = fc->tosrcpktcnt - pkts_tosrc;
             bytes_tosrc = fc->tosrcbytecnt - bytes_tosrc;
             pkts_todst = fc->todstpktcnt - pkts_todst;
@@ -358,8 +357,12 @@ static void FlowManagerHashRowTimeout(FlowManagerTimeoutThread *td, Flow *f, SCT
          * be modified when we have both the flow and hash row lock */
 
         /* timeout logic goes here */
-        const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
-        if (!shutdown && !FlowManagerFlowTimeout(f, ts, next_ts, emergency)) {
+        bool bypass_shutdown = false;
+#ifdef CAPTURE_OFFLOAD
+        /* Force check of bypassed flow activity at shutdown stage*/
+        bypass_shutdown = (f->flow_state == FLOW_STATE_CAPTURE_BYPASSED) && (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
+#endif /* CAPTURE_OFFLOAD */
+        if (!bypass_shutdown && !FlowManagerFlowTimeout(f, ts, next_ts, emergency)) {
             FLOWLOCK_UNLOCK(f);
             counters->flows_notimeout++;
 
@@ -379,7 +382,7 @@ static void FlowManagerHashRowTimeout(FlowManagerTimeoutThread *td, Flow *f, SCT
             f = f->next;
             continue;
         }
-#endif
+#endif /* CAPTURE_OFFLOAD */
         f->flow_end_flags |= FLOW_END_FLAG_TIMEOUT;
 
         counters->flows_timeout++;
@@ -978,13 +981,15 @@ static TmEcode FlowManager(ThreadVars *th_v, void *thread_data)
         }
 
         if (TmThreadsCheckFlag(th_v, THV_KILL)) {
+#ifdef CAPTURE_OFFLOAD
+            /* Pass through all flows to gather counters from bypassed flows */
             SC_ATOMIC_OR(flow_flags, FLOW_SHUTDOWN);
             // clang-format off
             FlowTimeoutCounters counters = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, };
             // clang-format on
-            /*Pass through all flows to gather counters from bypassed flows*/
             FlowTimeoutHash(&ftd->timeout, ts, ftd->min, ftd->max, &counters);
             FlowCountersUpdate(th_v, ftd, &counters);
+#endif /* CAPTURE_OFFLOAD */
             StatsSyncCounters(&th_v->stats);
             break;
         }

@@ -303,7 +303,7 @@ typedef struct FlowKey_
     uint8_t proto;
     uint8_t recursion_level;
     uint16_t livedev_id;
-    LiveDevice *livedev;
+    struct LiveDevice_ *livedev;
     uint16_t vlan_id[VLAN_MAX_LAYERS];
 } FlowKey;
 

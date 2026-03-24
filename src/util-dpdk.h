@@ -32,8 +32,10 @@ typedef struct {
     struct rte_mempool **pkt_mp;
     uint16_t pkt_mp_cnt;
     uint16_t pkt_mp_capa;
+#ifdef HAVE_DPDK
     RteFlowRuleStorage *drop_filter;
     RteFlowBypassData *rte_flow_bypass_data;
+#endif /* HAVE_DPDK */
     uint16_t port_id;
 } DPDKDeviceResources;
 

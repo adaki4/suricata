@@ -42,9 +42,12 @@
 #include "util-dpdk-rte-flow.h"
 #include "util-dpdk-rte-flow-pattern.h"
 #include "util-device-private.h"
+#include "flow-private.h"
+#include "flow.h"
 #include "runmodes.h"
 #include "tm-threads.h"
 #include "suricata.h"
+SC_ATOMIC_EXTERN(unsigned int, flow_flags);
 
 #ifdef HAVE_DPDK
 
@@ -926,8 +929,8 @@ int RteFlowBypassRuleLoad(
         int inet_family = FLOW_IS_IPV4(flow) ? AF_INET : AF_INET6;
 
         retval = RteFlowSetFlowBypassInfo(flow, src_rule_handler, dst_rule_handler, inet_family);
-        if (retval != 0) {
-            bypassstats->count++;
+        if (retval == 0) {
+            // bypassstats->count++;
             success_count++;
             SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_rules_active, 1);
             SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_rules_created, 1);
@@ -955,6 +958,9 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
     }
     bool activity = RteFlowUpdateStats(fc, flow->livedev->dpdk_vars->port_id,
             flow_handler_info->src_handler, flow_handler_info->dst_handler);
+    const bool evict = (SC_ATOMIC_GET(flow_flags) & FLOW_EVICT);
+    if (evict)
+        SCLogInfo("EVICTED");
     if (activity)
         flow->lastts = SCTIME_FROM_SECS(tsec);
     if (!activity || unlikely(suricata_ctl_flags != 0)) {
@@ -1005,14 +1011,14 @@ static int RteFlowSetFlowBypassInfo(
         fc->BypassFree = RteBypassFree;
         LiveDevAddBypassStats(flow->livedev, 1, family);
         LiveDevAddBypassSuccess(flow->livedev, 1, family);
-        SCReturnInt(1);
+        SCReturnInt(0);
     }
 
 bypass_fail:;
     RteFlowBiRuleDestroy(flow->livedev->dpdk_vars->port_id, src_handler, dst_handler);
     LiveDevAddBypassFail(flow->livedev, 1, family);
     FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
-    SCReturnInt(0);
+    SCReturnInt(-ENOMEM);
 }
 
 int RteFlowBypassCallback(Packet *p)
@@ -1028,8 +1034,7 @@ int RteFlowBypassCallback(Packet *p)
 
     FlowKey *flow_key = NULL;
     RteFlowBypassData *rte_flow_bypass_data = p->livedev->dpdk_vars->rte_flow_bypass_data;
-    uint32_t curr_ring_sz = rte_flow_bypass_data->bypass_ring->size -
-                      rte_flow_bypass_data->bypass_ring->capacity - 1;
+
     // SCLogInfo("r_sz: %i, r_capa: %i, mp_sz %i", rte_flow_bypass_data->bypass_ring->size, rte_flow_bypass_data->bypass_ring->capacity, rte_flow_bypass_data->bypass_mp->populated_size);
     /* The tested rte_flow rule capacity of the device has been exhausted, new rules will be added
      * after bypassed flows will timeout and the existing rules are be deleted */

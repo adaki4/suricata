@@ -49,6 +49,7 @@ int DPDKDeviceResourcesInit(DPDKDeviceResources **dpdk_vars, uint16_t mp_cnt)
 
 void DPDKDeviceResourcesDeinit(DPDKDeviceResources **dpdk_vars)
 {
+#ifdef HAVE_DPDK
     if ((*dpdk_vars) != NULL) {
         if ((*dpdk_vars)->pkt_mp != NULL) {
             for (int j = 0; j < (*dpdk_vars)->pkt_mp_capa; j++) {
@@ -64,6 +65,7 @@ void DPDKDeviceResourcesDeinit(DPDKDeviceResources **dpdk_vars)
         SCFree(*dpdk_vars);
         *dpdk_vars = NULL;
     }
+#endif /* HAVE_DPDK */
 }
 
 void DPDKCleanupEAL(void)
