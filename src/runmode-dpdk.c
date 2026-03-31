@@ -1983,7 +1983,7 @@ static int DPDKRunModeEnableIPS(void)
     int r = DPDKRunModeIsIPS();
     if (r == 1) {
         SCLogInfo("Setting IPS mode");
-        EngineModeSetIPS();
+        EngineModeSetIPS(ENGINE_HOST_IS_BRIDGE);
     }
     return r;
 }
