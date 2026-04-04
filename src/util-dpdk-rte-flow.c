@@ -72,6 +72,7 @@ static void RteFlowDropFilterInitAttr(const char *, struct rte_flow_attr *);
 static void RteFlowDropFilterInitAction(
         RteFlowRuleStorage *, const char *, const char *, struct rte_flow_action *);
 static bool RteFlowShouldGatherStats(RteFlowRuleStorage *, const char *, const char *);
+static uint32_t RteFlowBypassGetBypassInfoMPSize(const char *);
 static int RteFlowBypassRuleCreate(
         RteFlowBypassData *, struct rte_flow_item *, int, struct rte_flow **);
 static void RteFlowBiRuleDestroy(uint16_t, struct rte_flow *, struct rte_flow *);
@@ -501,6 +502,61 @@ static uint32_t DeviceDecideRteFlowRulesCapacity(const char *driver_name, uint32
 }
 
 /**
+ * \brief Retrieve dpdk.capture-bypass and set it to all interfaces.
+ *
+ * Get dpdk.capture-bypass flag for enabling rte_flow bypass.
+ * Set this global flag to each interface.
+ * Default setting is disabled.
+ *
+ * \param capture_bypass_str value to look for in suricata.yaml
+ * \param capture_bypass_enabled pointer to save gathered value
+ * \return 1 if bypass enabled, 0 if disabled
+ */
+int ConfigSetCaptureBypass(DPDKIfaceConfig *iconf)
+{
+    SCEnter();
+    int entry_bool = 0;
+    int retval = SCConfGetBool("dpdk.capture-bypass", &entry_bool);
+    if (retval != 1) {
+        iconf->capture_bypass_enabled = false;
+    } else {
+        iconf->capture_bypass_enabled = entry_bool;
+        retval = entry_bool;
+    }
+    SCReturnInt(retval);
+}
+
+/**
+ * \brief Get bypass-info mempool size from config.
+ *
+ * \param driver_name name of the driver
+ * \return User defined mempool size if set correctly, max_sz otherwise
+ */
+static uint32_t RteFlowBypassGetBypassInfoMPSize(const char *driver_name)
+{
+    SCEnter();
+
+    /* We are not taking into consideration the number of drop-filter rules here,
+       because we want to have a mempool of size (2^n)-1 */
+    intmax_t max_sz = DeviceDecideRteFlowRulesCapacity(driver_name, 0) - 1;
+    intmax_t sz = 0;
+
+    if (SCConfGetInt("dpdk.bypass-info-mp-size", &sz) != 1) {
+        SCLogConfig("bypass-info-mp-size not configured, setting it to max value (%jd)", max_sz);
+        SCReturnInt((uint32_t)max_sz);
+    }
+
+    if (sz > max_sz) {
+        SCLogConfig("bypass-info-mp-size too big (%jd), setting it to max value (%jd)", sz, max_sz);
+        sz = max_sz;
+    } else {
+        SCLogConfig("bypass-info-mp-size set to %jd", sz);
+    }
+
+    SCReturnInt((uint32_t)sz);
+}
+
+/**
  * \brief Enable and register functions for BypassManager,
  *        initialize rte_ring data structure and store in global
  *        variable
@@ -515,8 +571,12 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
     LiveDevice *livedev = LiveGetDevice(port_name);
     LiveDevUseBypass(livedev);
 
+    /* If the global struct rte_flow_bypass_data is already allocated,
+       the bypass is ready and we need only to decrease the rte_flow rules capacity
+       by number of drop-filter rules present on this interface */
     if (rte_flow_bypass_data != NULL) {
         iconf->pkt_mempools->rte_flow_bypass_data = rte_flow_bypass_data;
+        rte_flow_bypass_data->rte_bypass_rule_capacity -= iconf->drop_filter.rule_cnt;
         SCReturnInt(0);
     }
 
@@ -524,7 +584,7 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
     rte_flow_bypass_data = SCCalloc(1, sizeof(RteFlowBypassData));
     if (rte_flow_bypass_data == NULL) {
         SCLogError("%s: Memory allocation for RteFlowBypassData failed", port_name);
-        SCReturnInt(-1);
+        SCReturnInt(-ENOMEM);
     }
 
     struct rte_ring *bypass_ring = rte_ring_create(
@@ -547,9 +607,8 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
     }
     rte_flow_bypass_data->bypass_mp = bypass_mp;
 
-    /* We set the bypass_info_mp size larger than the previous mempool, because objects from this
-       mempool have longer lifespan, until flow timeouts and its entry is removed from FlowTable */
-    uint32_t bypass_info_mempool_size = (RTE_BYPASS_RING_SIZE * 16) - 1;
+    /* We set the bypass_info_mp size to the capacity of the underlying hardware */
+    uint32_t bypass_info_mempool_size = RteFlowBypassGetBypassInfoMPSize(driver_name);
     struct rte_mempool *bypass_info_mp = rte_mempool_create(RTE_BYPASS_INFO_MEMPOOL_NAME,
             bypass_info_mempool_size, sizeof(RteFlowHandlerToFlow),
             MempoolCacheSizeCalculate(bypass_info_mempool_size), 0, NULL, NULL, NULL, NULL,

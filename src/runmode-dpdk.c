@@ -147,6 +147,7 @@ DPDKIfaceConfigAttributes dpdk_yaml = {
     .copy_mode = "copy-mode",
     .copy_iface = "copy-iface",
     .drop_filter = "drop-filter",
+    .capture_bypass = "capture-bypass",
 };
 
 /**
@@ -1026,6 +1027,11 @@ static int ConfigLoad(DPDKIfaceConfig *iconf, const char *iface)
     if (retval < 0)
         SCReturnInt(retval);
 
+    /* Global flag dpdk.capture-bypass is set to each interface */
+    retval = ConfigSetCaptureBypass(iconf);
+    if (retval < 0)
+        SCReturnInt(retval);
+
     SCReturnInt(0);
 }
 
@@ -1616,11 +1622,16 @@ static int DeviceConfigureDynamicBypass(
         DPDKIfaceConfig *iconf, const struct rte_eth_dev_info *dev_info)
 {
     SCEnter();
-    const char *driver_name = dev_info->driver_name;
     int retval = 0;
-    if ((strcmp(driver_name, "net_ice") == 0) || strcmp(driver_name, "mlx5_pci") == 0) {
-        retval = RteBypassInit(iconf, driver_name);
+    if (!(iconf->capture_bypass_enabled)) {
+        SCReturnInt(retval);
     }
+    const char *driver_name = dev_info->driver_name;
+    if (strcmp(driver_name, "mlx5_pci") == 0)
+        retval = RteBypassInit(iconf, driver_name);
+
+    if (retval == 0)
+        SCLogConfig("%s rte_flow capture bypass enabled", iconf->iface);
     SCReturnInt(retval);
 }
 /**
