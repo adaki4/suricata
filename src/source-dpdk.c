@@ -607,14 +607,14 @@ static void HandleShutdown(DPDKThreadVars *ptv)
                     0) {
                 SCLogInfo("Waiting for all bypass rte_flow rules to be removed");
                 while (SC_ATOMIC_GET(ptv->livedev->dpdk_vars->rte_flow_bypass_data
-                                       ->rte_bypass_rules_active) != 0) {
+                                             ->rte_bypass_rules_active) != 0) {
                     rte_delay_us(100000);
                     DPDKDumpCounters(ptv);
                 }
             }
         }
         DPDKDumpCounters(ptv);
-        struct rte_flow_error err = {0};
+        struct rte_flow_error err = { 0 };
         rte_flow_flush(0, &err);
         if (ptv->copy_mode == DPDK_COPY_MODE_TAP || ptv->copy_mode == DPDK_COPY_MODE_IPS) {
             rte_eth_dev_stop(ptv->out_port_id);

@@ -954,7 +954,7 @@ Flow *FlowGetFlowFromHash(ThreadVars *tv, FlowLookupStruct *fls, Packet *p, Flow
             const bool timedout = (timeout_check && FlowIsTimedOut(tv_id, f, p->ts, emerg));
 #ifdef CAPTURE_OFFLOAD
             if (timedout && f->flow_state != FLOW_STATE_CAPTURE_BYPASSED) {
-#else 
+#else
             if (timedout) {
 #endif /* CAPTURE_OFFLOAD */
                 next_f = f->next;

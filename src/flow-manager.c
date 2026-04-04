@@ -360,7 +360,8 @@ static void FlowManagerHashRowTimeout(FlowManagerTimeoutThread *td, Flow *f, SCT
         bool bypass_shutdown = false;
 #ifdef CAPTURE_OFFLOAD
         /* Force check of bypassed flow activity at shutdown stage*/
-        bypass_shutdown = (f->flow_state == FLOW_STATE_CAPTURE_BYPASSED) && (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
+        bypass_shutdown = (f->flow_state == FLOW_STATE_CAPTURE_BYPASSED) &&
+                          (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
 #endif /* CAPTURE_OFFLOAD */
         if (!bypass_shutdown && !FlowManagerFlowTimeout(f, ts, next_ts, emergency)) {
             FLOWLOCK_UNLOCK(f);

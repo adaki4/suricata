@@ -39,7 +39,6 @@
 /** Flow engine is in shutdown mode. This means it will not accept new flows
  *  and will only process existing flows. */
 #define FLOW_SHUTDOWN 0x02
-#define FLOW_EVICT 0x04
 
 /* Flow Time out values */
 #define FLOW_DEFAULT_NEW_TIMEOUT 30

@@ -747,7 +747,8 @@ static int RteFlowBypassRuleCreate(RteFlowBypassData *rte_flow_bypass_data,
     SCReturnInt(retval);
 
 rule_failed:
-    SCLogError("rte_flow dynamic bypass: create rte_flow rule error %s errmsg: %s", rte_strerror(-retval), flow_error.message);
+    SCLogError("rte_flow dynamic bypass: create rte_flow rule error %s errmsg: %s",
+            rte_strerror(-retval), flow_error.message);
     SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_rules_error, 1);
     SCReturnInt(retval);
 }
@@ -853,10 +854,11 @@ int RteFlowBypassRuleLoad(
         uint32_t flow_hash = FlowKeyGetHash(flow_key);
         Flow *flow = FlowGetExistingFlowFromHash(flow_key, flow_hash);
         rte_mempool_put(bypass_mp, flow_key);
-        
+
         /* If error, destroy the rule for flow in original direction and set flow state to local
          * bypass*/
-        if (flow == NULL || SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) * 2 + 1 >= rte_flow_bypass_data->rte_bypass_rule_capacity) {
+        if (flow == NULL || SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) * 2 + 1 >=
+                                    rte_flow_bypass_data->rte_bypass_rule_capacity) {
             if (flow == NULL) {
                 SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flow_error, 1);
             } else {
@@ -1017,9 +1019,6 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
     }
     bool activity = RteFlowUpdateStats(fc, flow->livedev->dpdk_vars->port_id,
             flow_handler_info->src_handler, flow_handler_info->dst_handler);
-    const bool evict = (SC_ATOMIC_GET(flow_flags) & FLOW_EVICT);
-    if (evict)
-        SCLogInfo("EVICTED");
     if (activity)
         flow->lastts = SCTIME_FROM_SECS(tsec);
     if (!activity || unlikely(suricata_ctl_flags != 0)) {
@@ -1094,7 +1093,6 @@ int RteFlowBypassCallback(Packet *p)
     FlowKey *flow_key = NULL;
     RteFlowBypassData *rte_flow_bypass_data = p->livedev->dpdk_vars->rte_flow_bypass_data;
 
-    // SCLogInfo("r_sz: %i, r_capa: %i, mp_sz %i", rte_flow_bypass_data->bypass_ring->size, rte_flow_bypass_data->bypass_ring->capacity, rte_flow_bypass_data->bypass_mp->populated_size);
     /* The tested rte_flow rule capacity of the device has been exhausted, new rules will be added
      * after bypassed flows will timeout and the existing rules are be deleted */
     if (SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) * 2 + 1 >=
