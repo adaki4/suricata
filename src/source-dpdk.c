@@ -217,14 +217,15 @@ static int DevicePostStartPMDSpecificActions(
     else if (strcmp(driver_name, "mlx5_pci") == 0)
         mlx5DeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
 
-    if ((strcmp(driver_name, "mlx5_pci") == 0 || strcmp(driver_name, "net_ice") == 0 ||
-                strcmp(driver_name, "net_i40e") == 0)) {
-        int retval =
-                RteFlowRulesCreate(dpdk_config->port_id, &dpdk_config->drop_filter, driver_name);
-        if (retval != 0)
-            SCReturnInt(retval);
-        ptv->livedev->dpdk_vars->drop_filter = &dpdk_config->drop_filter;
-    }
+    /* Drop-filter rule creation removed during Template API migration */
+    // if ((strcmp(driver_name, "mlx5_pci") == 0 || strcmp(driver_name, "net_ice") == 0 ||
+    //             strcmp(driver_name, "net_i40e") == 0)) {
+    //     int retval =
+    //             RteFlowRulesCreate(dpdk_config->port_id, &dpdk_config->drop_filter, driver_name);
+    //     if (retval != 0)
+    //         SCReturnInt(retval);
+    //     ptv->livedev->dpdk_vars->drop_filter = &dpdk_config->drop_filter;
+    // }
     SCReturnInt(0);
 }
 

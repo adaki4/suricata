@@ -35,6 +35,7 @@ typedef struct {
 #ifdef HAVE_DPDK
     RteFlowRuleStorage *drop_filter;
     RteFlowBypassData *rte_flow_bypass_data;
+    RteFlowRSSTemplateResources *rss_template_resources;
 #endif /* HAVE_DPDK */
     uint16_t port_id;
 } DPDKDeviceResources;

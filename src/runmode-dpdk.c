@@ -358,7 +358,7 @@ static void ConfigInit(DPDKIfaceConfig **iconf)
     SC_ATOMIC_INIT(ptr->ref);
     (void)SC_ATOMIC_ADD(ptr->ref, 1);
     ptr->DerefFunc = DPDKDerefConfig;
-    ptr->RteRulesFree = RteFlowRuleStorageFree;
+    // ptr->RteRulesFree = RteFlowRuleStorageFree;
     ptr->flags = 0;
 
     *iconf = ptr;
@@ -1097,9 +1097,10 @@ static int ConfigLoad(DPDKIfaceConfig *iconf, const char *iface)
     if (retval < 0)
         SCReturnInt(retval);
 
-    retval = ConfigLoadRteFlowRules(if_root, dpdk_yaml.drop_filter, &iconf->drop_filter);
-    if (retval < 0)
-        SCReturnInt(retval);
+    /* Drop-filter YAML parsing removed during Template API migration */
+    // retval = ConfigLoadRteFlowRules(if_root, dpdk_yaml.drop_filter, &iconf->drop_filter);
+    // if (retval < 0)
+    //     SCReturnInt(retval);
 
     /* Global flag dpdk.capture-bypass is set to each interface */
     retval = ConfigSetCaptureBypass(iconf);

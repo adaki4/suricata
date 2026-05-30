@@ -41,6 +41,8 @@
 #include "util-dpdk-common.h"
 #include "util-dpdk-rte-flow-structs.h"
 
+/* Drop-filter functions — commented out during Template API migration */
+#if 0
 void RteFlowRuleStorageFree(RteFlowRuleStorage *rule_storage);
 int ConfigLoadRteFlowRules(
         SCConfNode *if_root, const char *drop_filter_str, RteFlowRuleStorage *rule_storage);
@@ -55,6 +57,11 @@ int RteFlowBypassRuleLoad(
 bool RteBypassUpdate(Flow *flow, void *data, time_t tsec);
 void RteBypassFree(void *data);
 
+/* Template API resource management */
+int RteFlowTemplateResourcesInit(RteFlowBypassData *data, uint16_t port_id);
+void RteFlowTemplateResourcesFree(RteFlowBypassData *data);
+
+#endif /* 0 */
 #endif /* HAVE_DPDK */
 #endif /* SURICATA_RTE_FLOW_RULES_H */
 /**
