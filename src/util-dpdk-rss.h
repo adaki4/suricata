@@ -42,6 +42,12 @@ int DPDKSetRSSFlowQueues(int port_id, const char *port_name, struct rte_flow_act
 int DPDKCreateRSSFlow(int port_id, const char *port_name, struct rte_flow_action_rss rss_conf,
         uint64_t rss_type, struct rte_flow_item *pattern);
 
+/* Template API RSS function (DPDK 22.11+) */
+int DPDKCreateRSSFlowTemplate(int port_id, const char *port_name,
+        struct rte_flow_action_rss rss_conf, uint64_t rss_type,
+        struct rte_flow_item *pattern, int nb_pattern_items,
+        RteFlowRSSTemplateResources *rss_tmpl);
+
 #endif /* HAVE_DPDK */
 
 #endif /* UTIL_DPDK_RSS */

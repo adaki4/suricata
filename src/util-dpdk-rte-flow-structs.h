@@ -57,8 +57,22 @@ typedef struct RteFlowBypassData_ {
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flow_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_query_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_enqueue_error);
-
+    /* Template API handles (DPDK 22.11+) */
+    struct rte_flow_template_table *bypass_tbl;
+    struct rte_flow_pattern_template *bypass_pt;
+    struct rte_flow_actions_template *bypass_at;
+    struct rte_flow_action_handle *indir_action_tmpl;  /* indirect COUNT action handle template */
+    struct rte_flow_op_attr op_attr;
+    uint16_t port_id;
+    bool template_api_available;
 } RteFlowBypassData;
+
+/** \brief Holds RSS Template API resources for cleanup on device close */
+typedef struct RteFlowRSSTemplateResources_ {
+    struct rte_flow_template_table *tbl;
+    struct rte_flow_pattern_template *pt;
+    struct rte_flow_actions_template *at;
+} RteFlowRSSTemplateResources;
 
 #endif /* HAVE_DPDK */
 #endif /* SURICATA_RTE_FLOW_STRUCTS_H */
