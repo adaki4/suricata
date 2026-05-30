@@ -809,12 +809,12 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_rules_created);
 
 #if RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0)
-    /* Configure the port for Template API (rte_flow) operations */
     struct rte_flow_port_attr port_attr = {
         .nb_counters=1,
     };
-    struct rte_flow_queue_attr queue_attr = { .size = 64 };
-
+    struct rte_flow_queue_attr queue_attr = { 
+        .size = 64 
+    };
     const struct rte_flow_queue_attr *queue_attrs[] = {
         &queue_attr,
         &queue_attr,
@@ -1335,7 +1335,8 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
         /* Rules already deleted */
         return false;
     }
-    bool activity = RteFlowUpdateStats(fc, flow->livedev->dpdk_vars->port_id,
+    LiveDevice *livedev = LiveDeviceGetById(flow->livedev_id);
+    bool activity = RteFlowUpdateStats(fc, livedev->dpdk_vars->port_id,
             flow_handler_info->src_handler, flow_handler_info->dst_handler);
     if (activity)
         flow->lastts = SCTIME_FROM_SECS(tsec);
@@ -1369,6 +1370,36 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
 void RteBypassFree(void *data)
 {
     RteFlowHandlerToFlow *flow_handler_info = (RteFlowHandlerToFlow *)data;
+    if (flow_handler_info->src_handler != NULL && flow_handler_info->dst_handler != NULL) {
+        FlowBypassInfo *fc = SCFlowGetStorageById(flow_handler_info->flow, GetFlowBypassInfoID());
+        if (fc == NULL) {
+            SCLogError("rte_flow dynamic bypass: flow_bypass_info is NULL");
+            return;
+        }
+        LiveDevice *livedev = LiveDeviceGetById(flow_handler_info->flow->livedev_id);
+        RteFlowUpdateStats(fc, livedev->dpdk_vars->port_id,
+                flow_handler_info->src_handler, flow_handler_info->dst_handler);
+        RteFlowBiRuleDestroy(flow_handler_info->livedev->dpdk_vars->port_id,
+                flow_handler_info->src_handler, flow_handler_info->dst_handler,
+                flow_handler_info->rte_flow_bypass_data);
+        /* Destroy per-flow action handles if present */
+        struct rte_flow_error flow_error = { 0 };
+        if (flow_handler_info->src_action_handle != NULL) {
+            rte_flow_action_handle_destroy(
+                    flow_handler_info->livedev->dpdk_vars->port_id,
+                    flow_handler_info->src_action_handle, &flow_error);
+            flow_handler_info->src_action_handle = NULL;
+        }
+        if (flow_handler_info->dst_action_handle != NULL) {
+            rte_flow_action_handle_destroy(
+                    flow_handler_info->livedev->dpdk_vars->port_id,
+                    flow_handler_info->dst_action_handle, &flow_error);
+            flow_handler_info->dst_action_handle = NULL;
+        }
+        flow_handler_info->src_handler = NULL;
+        flow_handler_info->dst_handler = NULL;
+        SC_ATOMIC_SUB(flow_handler_info->rte_flow_bypass_data->rte_bypass_rules_active, 1);
+    }
     if (flow_handler_info != NULL) {
         rte_mempool_put(flow_handler_info->livedev->dpdk_vars->rte_flow_bypass_data->bypass_info_mp,
                 flow_handler_info);
@@ -1380,14 +1411,15 @@ static int RteFlowSetFlowBypassInfo(Flow *flow, struct rte_flow *src_handler,
         struct rte_flow_action_handle *dst_action_handle, int family)
 {
     FlowBypassInfo *fc = SCFlowGetStorageById(flow, GetFlowBypassInfoID());
+    LiveDevice *livedev = LiveDeviceGetById(flow->livedev_id);
     if (fc) {
         if (fc->bypass_data != NULL) {
             SCReturnInt(0);
         }
         RteFlowHandlerToFlow *flow_handler_info;
-        if (rte_mempool_get(flow->livedev->dpdk_vars->rte_flow_bypass_data->bypass_info_mp,
+        if (rte_mempool_get(livedev->dpdk_vars->rte_flow_bypass_data->bypass_info_mp,
                     (void **)&flow_handler_info) < 0) {
-            SC_ATOMIC_ADD(flow->livedev->dpdk_vars->rte_flow_bypass_data
+            SC_ATOMIC_ADD(livedev->dpdk_vars->rte_flow_bypass_data
                                   ->rte_bypass_info_mempool_get_error,
                     1);
             /* Mempool capacity has been reachead, switch to local bypass */
@@ -1398,14 +1430,14 @@ static int RteFlowSetFlowBypassInfo(Flow *flow, struct rte_flow *src_handler,
         flow_handler_info->dst_handler = dst_handler;
         flow_handler_info->src_action_handle = src_action_handle;
         flow_handler_info->dst_action_handle = dst_action_handle;
-        flow_handler_info->livedev = flow->livedev;
-        flow_handler_info->rte_flow_bypass_data = flow->livedev->dpdk_vars->rte_flow_bypass_data;
+        flow_handler_info->livedev = livedev;
+        flow_handler_info->rte_flow_bypass_data = livedev->dpdk_vars->rte_flow_bypass_data;
         fc->bypass_data = flow_handler_info;
         fc->BypassUpdate = RteBypassUpdate;
         fc->BypassFree = RteBypassFree;
-        LiveDevAddBypassStats(flow->livedev, 1, family);
-        LiveDevAddBypassSuccess(flow->livedev, 1, family);
-        SCReturnInt(0);
+        LiveDevAddBypassStats(livedev, 1, family);
+        LiveDevAddBypassSuccess(livedev, 1, family);
+        SCReturnInt(1);
     }
 
 bypass_fail:;
@@ -1426,8 +1458,8 @@ int RteFlowBypassCallback(Packet *p)
     if (!(PacketIsTCP(p) || PacketIsUDP(p))) {
         SCReturnInt(0);
     }
-
-    RteFlowBypassData *rte_flow_bypass_data = p->livedev->dpdk_vars->rte_flow_bypass_data;
+    LiveDevice *livedev = LiveDeviceGetById(p->livedev_id);
+    RteFlowBypassData *rte_flow_bypass_data = livedev->dpdk_vars->rte_flow_bypass_data;
 
     /* The tested rte_flow rule capacity of the device has been exhausted, new rules will be added
      * after bypassed flows will timeout and the existing rules are be deleted */
@@ -1648,8 +1680,9 @@ int RteFlowBypassCallback(Packet *p)
         }
         flow_key->sp = p->sp;
         flow_key->dp = p->dp;
-        flow_key->livedev_id = p->livedev->id;
-        flow_key->livedev = p->livedev;
+        LiveDevice *livedev = LiveDeviceGetById(p->livedev_id);
+        flow_key->livedev_id = livedev->id;
+        flow_key->livedev = livedev;
         flow_key->vlan_id[0] = p->vlan_id[0];
         flow_key->vlan_id[1] = p->vlan_id[1];
         flow_key->vlan_id[2] = p->vlan_id[2];
