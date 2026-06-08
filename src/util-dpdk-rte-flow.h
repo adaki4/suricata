@@ -42,7 +42,6 @@
 #include "util-dpdk-rte-flow-structs.h"
 
 /* Drop-filter functions — commented out during Template API migration */
-#if 0
 void RteFlowRuleStorageFree(RteFlowRuleStorage *rule_storage);
 int ConfigLoadRteFlowRules(
         SCConfNode *if_root, const char *drop_filter_str, RteFlowRuleStorage *rule_storage);
@@ -51,6 +50,7 @@ uint64_t RteFlowFilteredPacketsQuery(
         struct rte_flow **rules, uint32_t rule_count, const char *device_name, int port_id);
 int ConfigSetCaptureBypass(DPDKIfaceConfig *);
 int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name);
+int RteFlowBypassPostStartInit(RteFlowBypassData *rte_flow_bypass_data);
 int RteFlowBypassCallback(Packet *);
 int RteFlowBypassRuleLoad(
         ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
@@ -61,7 +61,11 @@ void RteBypassFree(void *data);
 int RteFlowTemplateResourcesInit(RteFlowBypassData *data, uint16_t port_id);
 void RteFlowTemplateResourcesFree(RteFlowBypassData *data);
 
-#endif /* 0 */
+/* Jump rule (group 0 -> group 1) async creation */
+int RteFlowJumpRuleTemplateInit(RteFlowBypassData *data);
+int RteFlowJumpRuleInit(RteFlowBypassData *data);
+void RteFlowJumpRuleFree(RteFlowBypassData *data);
+
 #endif /* HAVE_DPDK */
 #endif /* SURICATA_RTE_FLOW_RULES_H */
 /**
