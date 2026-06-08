@@ -61,10 +61,15 @@ typedef struct RteFlowBypassData_ {
     struct rte_flow_template_table *bypass_tbl;
     struct rte_flow_pattern_template *bypass_pt;
     struct rte_flow_actions_template *bypass_at;
-    struct rte_flow_action_handle *indir_action_tmpl;  /* indirect COUNT action handle template */
     struct rte_flow_op_attr op_attr;
     uint16_t port_id;
     bool template_api_available;
+    /* Jump rule (group 0 -> group 1) Template API handles */
+    struct rte_flow_template_table *jump_tbl;
+    struct rte_flow_pattern_template *jump_pt;
+    struct rte_flow_actions_template *jump_at;
+    struct rte_flow *jump_flow;
+    struct rte_flow_action_handle *jump_count_handle; /* per-rule indirect COUNT for the jump rule */
 } RteFlowBypassData;
 
 /** \brief Holds RSS Template API resources for cleanup on device close */
