@@ -56,7 +56,7 @@
 #define RULE_STORAGE_SIZE_INC  16
 #define COUNT_ACTION_ID        1
 
-#if RTE_VERSION >= RTE_VERSION_NUM(21, 11, 0, 0)
+// #if RTE_VERSION >= RTE_VERSION_NUM(21, 11, 0, 0)
 #define RTE_JUMP_GROUP               1
 #define RTE_BYPASS_RING_NAME         "rte_bypass_ring"
 #define RTE_BYPASS_MEMPOOL_NAME      "rte_bypass_mempool"
@@ -75,11 +75,13 @@ static bool RteFlowShouldGatherStats(RteFlowRuleStorage *, const char *, const c
 static uint32_t RteFlowBypassGetBypassInfoMPSize(const char *, uint32_t *);
 static int RteFlowBypassRuleCreate(
         RteFlowBypassData *, struct rte_flow_item *, int, struct rte_flow **);
+static void RteFlowBiRuleDestroy(RteFlowBypassData *, uint16_t , struct rte_flow *, struct rte_flow *);
 static void RteFlowHandleEmergency(ThreadVars *, Flow *, void *);
 static int RteFlowUpdateStats(FlowBypassInfo *, uint16_t, struct rte_flow *, struct rte_flow *);
 static int RteFlowSetFlowBypassInfo(Flow *, struct rte_flow *, struct rte_flow *,
         struct rte_flow_action_handle *, struct rte_flow_action_handle *, int);
 static uint32_t DeviceDecideRteFlowRulesCapacity(const char *, uint32_t);
+
 
 typedef struct RteFlowHandlerToFlow_ {
     Flow *flow;
@@ -225,7 +227,8 @@ static bool RteFlowShouldGatherStats(
         return false;
     return true;
 }
-#endif /* RTE_VERSION >= RTE_VERSION_NUM(21, 11, 0, 0) */
+// #endif /* RTE_VERSION >= RTE_VERSION_NUM(21, 11, 0, 0) */
+#endif 0
 
 #if RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0)
 /**
@@ -245,7 +248,7 @@ int RteFlowTemplateResourcesInit(RteFlowBypassData *data, uint16_t port_id)
     struct rte_flow_attr attr = {
         .ingress = 1,
         .priority = 0,
-        .group = 0,
+        .group = 1,
         .transfer = 0,
     };
 
@@ -263,7 +266,7 @@ int RteFlowTemplateResourcesInit(RteFlowBypassData *data, uint16_t port_id)
     };
 
     data->bypass_pt = rte_flow_pattern_template_create(
-            port_id, &pt_attr, &pattern_template, &flow_error);
+            port_id, &pt_attr, pattern_template, &flow_error);
     if (data->bypass_pt == NULL) {
         SCLogError("rte_flow dynamic bypass: pattern template create error: %s",
                 flow_error.message);
@@ -358,6 +361,9 @@ void RteFlowTemplateResourcesFree(RteFlowBypassData *data)
 {
     struct rte_flow_error flow_error = { 0 };
 
+    /* Free jump rule (classic API handle) first */
+    RteFlowJumpRuleFree(data);
+
     if (data->bypass_tbl != NULL) {
         rte_flow_template_table_destroy(data->port_id, data->bypass_tbl, &flow_error);
         data->bypass_tbl = NULL;
@@ -375,6 +381,181 @@ void RteFlowTemplateResourcesFree(RteFlowBypassData *data)
         data->indir_action_tmpl = NULL;
     }
     data->template_api_available = false;
+}
+
+/**
+ * \brief Initialize async jump rule (group 0 -> group 1) using Template API.
+ *
+ * Creates a match-all pattern template, a JUMP actions template targeting
+ * RTE_JUMP_GROUP, a template table in group 0, and an async flow rule
+ * that redirects all traffic from group 0 to group 1.
+ * \
+ * Requires data->op_attr and data->port_id to be initialized before calling.
+ * Must be called AFTER rte_flow_configure() but BEFORE any group 1 template
+ * tables are created (mlx5 PMD requires group 0 tables inserted first).
+ * \
+ * \param data bypass data structure to populate with jump rule handles
+ * \return 0 on success, -1 on error
+ */
+int RteFlowJumpRuleInit(RteFlowBypassData *data)
+{
+    struct rte_flow_error flow_error = { 0 };
+
+    /* --- Pattern Template (match-all, END only means match everything) --- */
+    struct rte_flow_item pattern_template[] = {
+        [0] = { .type = RTE_FLOW_ITEM_TYPE_END },
+    };
+
+    struct rte_flow_pattern_template_attr pt_attr = {
+        .ingress = 1,
+    };
+
+    data->jump_pt = rte_flow_pattern_template_create(
+            data->port_id, &pt_attr, pattern_template, &flow_error);
+    if (data->jump_pt == NULL) {
+        SCLogError("rte_flow jump rule: pattern template create error: %s",
+                flow_error.message);
+        return -1;
+    }
+
+    /* --- Actions Template (JUMP to RTE_JUMP_GROUP) --- */
+    struct rte_flow_action_jump jump_conf = {
+        .group = RTE_JUMP_GROUP,
+    };
+
+    /* --- Actions Template (JUMP to RTE_JUMP_GROUP) --- */
+    struct rte_flow_action_jump jump_conf_mask = {
+        .group = UINT32_MAX, 
+    };
+
+    struct rte_flow_action actions_template[2] = {
+        [0] = { .type = RTE_FLOW_ACTION_TYPE_JUMP, .conf = &jump_conf },
+        [1] = { .type = RTE_FLOW_ACTION_TYPE_END },
+    };
+
+    struct rte_flow_action masks_template[2] = {
+        [0] = { .type = RTE_FLOW_ACTION_TYPE_JUMP, .conf = &jump_conf_mask },
+        [1] = { .type = RTE_FLOW_ACTION_TYPE_END },
+    };
+
+    struct rte_flow_actions_template_attr at_attr = {
+        .ingress = 1,
+    };
+
+    data->jump_at = rte_flow_actions_template_create(
+            data->port_id, &at_attr, actions_template, masks_template, &flow_error);
+    if (data->jump_at == NULL) {
+        SCLogError("rte_flow jump rule: actions template create error: %s",
+                flow_error.message);
+        rte_flow_pattern_template_destroy(data->port_id, data->jump_pt, &flow_error);
+        data->jump_pt = NULL;
+        return -1;
+    }
+
+    /* --- Template Table (group 0, single rule) --- */
+    struct rte_flow_attr attr = {
+        .ingress = 1,
+        .priority = 0,
+        .group = 0,
+    };
+
+    struct rte_flow_template_table_attr tbl_attr = {
+        .flow_attr = attr,
+        .nb_flows = 1,
+    };
+
+    struct rte_flow_pattern_template *pts[] = { data->jump_pt };
+    struct rte_flow_actions_template *ats[] = { data->jump_at };
+
+    data->jump_tbl = rte_flow_template_table_create(
+            data->port_id, &tbl_attr, pts, RTE_DIM(pts), ats, RTE_DIM(ats), &flow_error);
+    if (data->jump_tbl == NULL) {
+        SCLogError("rte_flow jump rule: template table create error: %s",
+                flow_error.message);
+        rte_flow_actions_template_destroy(data->port_id, data->jump_at, &flow_error);
+        rte_flow_pattern_template_destroy(data->port_id, data->jump_pt, &flow_error);
+        data->jump_at = NULL;
+        data->jump_pt = NULL;
+        return -1;
+    }
+
+    /* --- Create async jump flow (match-all, END only means match everything) --- */
+    struct rte_flow_item items[] = {
+        [0] = { .type = RTE_FLOW_ITEM_TYPE_END },
+    };
+
+    struct rte_flow_action actions[] = {
+        [0] = { .type = RTE_FLOW_ACTION_TYPE_JUMP, .conf = &jump_conf },    
+        [1] = { .type = RTE_FLOW_ACTION_TYPE_END },
+    };
+    struct rte_flow_op_attr op_attr = {
+        .postpone = 0,
+    };
+    data->jump_flow = rte_flow_async_create(
+            data->port_id, 0, &op_attr,
+            data->jump_tbl, items, 0, actions, 0, NULL, &flow_error);
+    if (data->jump_flow == NULL) {
+        SCLogError("rte_flow jump rule: async create error: %s", flow_error.message);
+        rte_flow_template_table_destroy(data->port_id, data->jump_tbl, &flow_error);
+        rte_flow_actions_template_destroy(data->port_id, data->jump_at, &flow_error);
+        rte_flow_pattern_template_destroy(data->port_id, data->jump_pt, &flow_error);
+        data->jump_tbl = NULL;
+        data->jump_at = NULL;
+        data->jump_pt = NULL;
+        return -1;
+    }
+
+    /* Push to hardware */
+    int retval = rte_flow_push(data->port_id, 0, &flow_error);
+    if (retval < 0) {
+        SCLogError("rte_flow jump rule: push error: %s", flow_error.message);
+        rte_flow_async_destroy(data->port_id, 0, &data->op_attr,
+                data->jump_flow, NULL, &flow_error);
+        rte_flow_push(data->port_id, 0, &flow_error);
+        rte_flow_pull(data->port_id, 0, NULL, 0, &flow_error);
+        rte_flow_template_table_destroy(data->port_id, data->jump_tbl, &flow_error);
+        rte_flow_actions_template_destroy(data->port_id, data->jump_at, &flow_error);
+        rte_flow_pattern_template_destroy(data->port_id, data->jump_pt, &flow_error);
+        data->jump_flow = NULL;
+        data->jump_tbl = NULL;
+        data->jump_at = NULL;
+        data->jump_pt = NULL;
+        return -1;
+    }
+    rte_flow_pull(data->port_id, 0, NULL, 0, &flow_error);
+
+    SCLogInfo("rte_flow jump rule: async jump rule created (group 0 -> group %u)", RTE_JUMP_GROUP);
+    return 0;
+}
+
+/**
+ * \brief Free async jump rule template resources and destroy the jump flow.
+ *
+ * \param data bypass data structure containing jump rule handles
+ */
+void RteFlowJumpRuleFree(RteFlowBypassData *data)
+{
+    struct rte_flow_error flow_error = { 0 };
+
+    if (data->jump_flow != NULL) {
+        rte_flow_async_destroy(data->port_id, 0, &data->op_attr,
+                data->jump_flow, NULL, &flow_error);
+        rte_flow_push(data->port_id, 0, &flow_error);
+        rte_flow_pull(data->port_id, 0, NULL, 0, &flow_error);
+        data->jump_flow = NULL;
+    }
+    if (data->jump_tbl != NULL) {
+        rte_flow_template_table_destroy(data->port_id, data->jump_tbl, &flow_error);
+        data->jump_tbl = NULL;
+    }
+    if (data->jump_at != NULL) {
+        rte_flow_actions_template_destroy(data->port_id, data->jump_at, &flow_error);
+        data->jump_at = NULL;
+    }
+    if (data->jump_pt != NULL) {
+        rte_flow_pattern_template_destroy(data->port_id, data->jump_pt, &flow_error);
+        data->jump_pt = NULL;
+    }
 }
 #endif /* RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0) */
 
@@ -642,7 +823,6 @@ int RteFlowRulesCreate(uint16_t port_id, RteFlowRuleStorage *rule_storage, const
     SCReturnInt(0);
 }
 #endif /* 0 — end of drop-filter functions */
-#endif /* 0 — end of drop-filter functions */
 
 /**
  * \brief Decide what is the maximal capacity of dynamic bypass rte_flow rules the device can
@@ -810,29 +990,45 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
 
 #if RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0)
     struct rte_flow_port_attr port_attr = {
-        .nb_counters=1,
+        .nb_counters = 1,
     };
-    struct rte_flow_queue_attr queue_attr = { 
-        .size = 64 
+    struct rte_flow_queue_attr queue_attr = {
+        .size = 64
     };
     const struct rte_flow_queue_attr *queue_attrs[] = {
         &queue_attr,
         &queue_attr,
     };
- 
+
     struct rte_flow_error flow_error = { 0 };
-    int retval = rte_flow_configure(iconf->port_id, &port_attr, RTE_DIM(queue_attrs), queue_attrs, &flow_error);
+    retval = rte_flow_configure(
+            iconf->port_id, &port_attr, RTE_DIM(queue_attrs), queue_attrs, &flow_error);
     if (retval != 0) {
         SCLogWarning("%s: rte_flow_configure failed: %s, falling back to classic API",
                 port_name, flow_error.message);
         /* Continue with classic API — template_api_available remains false */
     } else {
-        /* Initialize Template API resources for async rule creation */
-        retval = RteFlowTemplateResourcesInit(rte_flow_bypass_data, iconf->port_id);
+        /* Initialize op_attr and port_id BEFORE creating any templates.
+         * Both RteFlowJumpRuleInit and RteFlowTemplateResourcesInit depend on these. */
+        rte_flow_bypass_data->op_attr.postpone = 0;
+        rte_flow_bypass_data->port_id = iconf->port_id;
+
+        /* Create jump rule FIRST (group 0 table), THEN bypass resources (group 1 table).
+         * The mlx5 PMD requires tables created in group order (0 before 1). */
+        retval = RteFlowJumpRuleInit(rte_flow_bypass_data);
         if (retval != 0) {
-            SCLogWarning("%s: Template API init failed, falling back to classic rte_flow API",
+            SCLogWarning("%s: Jump rule init failed, falling back to classic rte_flow API",
                     port_name);
             /* Continue with classic API — template_api_available remains false */
+        } else {
+            /* Initialize Template API resources for async bypass rule creation (group 1) */
+            retval = RteFlowTemplateResourcesInit(rte_flow_bypass_data, iconf->port_id);
+            if (retval != 0) {
+                SCLogWarning("%s: Template API init failed, falling back to classic rte_flow API",
+                        port_name);
+                RteFlowJumpRuleFree(rte_flow_bypass_data);
+                /* Continue with classic API — template_api_available remains false */
+            }
         }
     }
 #endif
@@ -985,8 +1181,7 @@ static int RteFlowBypassRuleCreate(RteFlowBypassData *rte_flow_bypass_data,
         struct rte_flow_item *items, int port_id, struct rte_flow **flow_handler)
 {
     struct rte_flow_error flow_error = { 0 };
-
-#if RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0)
+    int retval = 0;
     if (rte_flow_bypass_data->template_api_available) {
         /* Template API path: async create + push */
         *flow_handler = rte_flow_async_create(port_id, 0, /* queue_id = 0 */
@@ -1003,8 +1198,8 @@ static int RteFlowBypassRuleCreate(RteFlowBypassData *rte_flow_bypass_data,
         }
 
         /* Push to hardware immediately */
-        int ret = rte_flow_push(port_id, 0, &flow_error);
-        if (ret < 0) {
+        retval = rte_flow_push(port_id, 0, &flow_error);
+        if (retval < 0) {
             SCLogError("rte_flow dynamic bypass: push error: %s", flow_error.message);
             goto rule_failed;
         }
@@ -1013,11 +1208,7 @@ static int RteFlowBypassRuleCreate(RteFlowBypassData *rte_flow_bypass_data,
         rte_flow_pull(port_id, 0, NULL, 0, &flow_error);
 
         SCReturnInt(0);
-    }
-#endif /* RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0) */
-
-    /* --- Fallback: classic API --- */
-    {
+    } else { 
         struct rte_flow_attr attr = { 0 };
         struct rte_flow_action action[] = { { 0 }, { 0 }, { 0 } };
 
@@ -1032,7 +1223,7 @@ static int RteFlowBypassRuleCreate(RteFlowBypassData *rte_flow_bypass_data,
         action[1].type = RTE_FLOW_ACTION_TYPE_DROP;
         action[2].type = RTE_FLOW_ACTION_TYPE_END;
 
-        int retval = rte_flow_validate(port_id, &attr, items, action, &flow_error);
+        retval = rte_flow_validate(port_id, &attr, items, action, &flow_error);
         if (retval != 0) {
             goto rule_failed;
         }
@@ -1065,7 +1256,7 @@ static void RteFlowHandleEmergency(ThreadVars *tv, Flow *f, void *data)
     if (flow_handler_info == NULL)
         return;
     if (flow_handler_info->src_handler != NULL && flow_handler_info->dst_handler != NULL) {
-        RteFlowBiRuleDestroy(flow_handler_info->livedev->dpdk_vars->port_id,
+        RteFlowBiRuleDestroy(flow_handler_info->rte_flow_bypass_data, flow_handler_info->livedev->dpdk_vars->port_id,
                 flow_handler_info->src_handler, flow_handler_info->dst_handler);
         flow_handler_info->src_handler = NULL;
         flow_handler_info->dst_handler = NULL;
@@ -1080,13 +1271,12 @@ static void RteFlowHandleEmergency(ThreadVars *tv, Flow *f, void *data)
  * \param src_handler handler of rte_flow rule
  * \param dst_handler handler of rte_flow rule
  */
-static void RteFlowBiRuleDestroy(
+static void RteFlowBiRuleDestroy(RteFlowBypassData *rte_flow_bypass_data,
         uint16_t port_id, struct rte_flow *src_handler, struct rte_flow *dst_handler)
 {
     int retval = 0;
     struct rte_flow_error flow_error = { 0 };
 
-#if RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0)
     if (rte_flow_bypass_data != NULL && rte_flow_bypass_data->template_api_available) {
         if (src_handler != NULL) {
             retval = rte_flow_async_destroy(port_id, 0, &rte_flow_bypass_data->op_attr,
@@ -1108,7 +1298,6 @@ static void RteFlowBiRuleDestroy(
         rte_flow_pull(port_id, 0, NULL, 0, &flow_error);
         return;
     }
-#endif /* RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0) */
 
     /* Fallback: classic API */
     if (src_handler != NULL) {
@@ -1300,7 +1489,7 @@ int RteFlowBypassRuleLoad(
         /* If error, destroy the rule for flow in original direction and set flow state to local
          * bypass*/
         if (retval != 0) {
-            RteFlowBiRuleDestroy(port_id, src_rule_handler, dst_rule_handler);
+            RteFlowBiRuleDestroy(rte_flow_bypass_data, port_id, src_rule_handler, dst_rule_handler);
             FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
             FLOWLOCK_UNLOCK(flow);
             continue;
@@ -1308,7 +1497,7 @@ int RteFlowBypassRuleLoad(
 
         int inet_family = FLOW_IS_IPV4(flow) ? AF_INET : AF_INET6;
 
-        retval = RteFlowSetFlowBypassInfo(flow, src_rule_handler, dst_rule_handler, inet_family);
+        retval = RteFlowSetFlowBypassInfo(flow, src_rule_handler, dst_rule_handler, inet_family, NULL, NULL);
         if (retval == 0) {
             success_count++;
             SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_rules_active, 2);
@@ -1441,9 +1630,8 @@ static int RteFlowSetFlowBypassInfo(Flow *flow, struct rte_flow *src_handler,
     }
 
 bypass_fail:;
-    RteFlowBiRuleDestroy(flow->livedev->dpdk_vars->port_id, src_handler, dst_handler,
-            flow->livedev->dpdk_vars->rte_flow_bypass_data);
-    LiveDevAddBypassFail(flow->livedev, 1, family);
+    RteFlowBiRuleDestroy(livedev->dpdk_vars->rte_flow_bypass_data, livedev->dpdk_vars->port_id, src_handler, dst_handler);
+    LiveDevAddBypassFail(livedev, 1, family);
     FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
     SCReturnInt(-ENOMEM);
 }
@@ -1467,8 +1655,7 @@ int RteFlowBypassCallback(Packet *p)
             rte_flow_bypass_data->rte_bypass_rule_capacity) {
         SCReturnInt(0);
     }
-
-#if RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0)
+    int retval = 0;
     if (rte_flow_bypass_data->template_api_available) {
         /* Template API direct path: build items and create async rules immediately */
         struct rte_flow_item items[] = {
@@ -1647,11 +1834,8 @@ int RteFlowBypassCallback(Packet *p)
             SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_rules_created, 1);
         }
         SCReturnInt(retval);
-    }
-#endif /* RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0) */
-
-    /* --- Fallback: classic ring-based path --- */
-    {
+    /* Fallback to regular API, DO NOT USE */
+    } else {
         FlowKey *flow_key = NULL;
 
         if (rte_mempool_get(rte_flow_bypass_data->bypass_mp, (void **)&flow_key) < 0) {
@@ -1688,15 +1872,17 @@ int RteFlowBypassCallback(Packet *p)
         flow_key->vlan_id[2] = p->vlan_id[2];
         flow_key->recursion_level = 0;
 
-    int retval = rte_ring_mp_enqueue(rte_flow_bypass_data->bypass_ring, flow_key);
-    /* If ring is full, continue with local bypass. Also, if Suricata shutdowns, do not increase
-     * counters */
-    if (retval < 0 || unlikely(suricata_ctl_flags != 0)) {
-        rte_mempool_put(rte_flow_bypass_data->bypass_mp, flow_key);
-        if (retval < 0)
-            SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_enqueue_error, 1);
+        retval = rte_ring_mp_enqueue(rte_flow_bypass_data->bypass_ring, flow_key);
+
+        /* If ring is full, continue with local bypass. Also, if Suricata shutdowns, do not increase
+            * counters */
+        if (retval < 0 || unlikely(suricata_ctl_flags != 0)) {
+            rte_mempool_put(rte_flow_bypass_data->bypass_mp, flow_key);
+            if (retval < 0)
+                SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_enqueue_error, 1);
+        }
+        retval = retval == 0 ? 1 : 0;
     }
-    retval = retval == 0 ? 1 : 0;
     SCReturnInt(retval);
 }
 

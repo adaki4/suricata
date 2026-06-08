@@ -340,7 +340,7 @@ static void DPDKDerefConfig(void *conf)
             }
         }
         DPDKDeviceResourcesDeinit(&iconf->dpdk_dev_resources);
-        iconf->RteRulesFree(&iconf->drop_filter);
+        // iconf->RteRulesFree(&iconf->drop_filter);
         SCFree(iconf);
     }
     SCReturn;
@@ -668,33 +668,33 @@ static int ConfigSetMempoolCacheSize(DPDKIfaceConfig *iconf, const char *entry_s
     SCReturnInt(0);
 }
 
-static int ConfigSetBypassRingSize(DPDKIfaceConfig *iconf, const char *entry_str)
-{
-    SCEnter();
-    if (entry_str == NULL || entry_str[0] == '\0') {
-        SCLogInfo("%s: size of bypass ring not found, going with: %s", iconf->iface,
-                DPDK_CONFIG_DEFAULT_BYPASS_RING_SIZE);
-        entry_str = DPDK_CONFIG_DEFAULT_BYPASS_RING_SIZE;
-    }
+// static int ConfigSetBypassRingSize(DPDKIfaceConfig *iconf, const char *entry_str)
+// {
+//     SCEnter();
+//     if (entry_str == NULL || entry_str[0] == '\0') {
+//         SCLogInfo("%s: size of bypass ring not found, going with: %s", iconf->iface,
+//                 DPDK_CONFIG_DEFAULT_BYPASS_RING_SIZE);
+//         entry_str = DPDK_CONFIG_DEFAULT_BYPASS_RING_SIZE;
+//     }
 
-    if (strcmp(entry_str, "auto") == 0) {
-        iconf->bypass_ring_size = 1024;
-        SCReturnInt(0);
-    }
+//     if (strcmp(entry_str, "auto") == 0) {
+//         iconf->bypass_ring_size = 1024;
+//         SCReturnInt(0);
+//     }
 
-    if (StringParseUint32(&iconf->bypass_ring_size, 10, 0, entry_str) < 0) {
-        SCLogError("%s: bypass ring size entry contains non-numerical characters - \"%s\"",
-                iconf->iface, entry_str);
-        SCReturnInt(-EINVAL);
-    }
+//     if (StringParseUint32(&iconf->bypass_ring_size, 10, 0, entry_str) < 0) {
+//         SCLogError("%s: bypass ring size entry contains non-numerical characters - \"%s\"",
+//                 iconf->iface, entry_str);
+//         SCReturnInt(-EINVAL);
+//     }
 
-    if (iconf->bypass_ring_size == 0) {
-        SCLogError("%s: positive number for bypass ring size is required", iconf->iface);
-        SCReturnInt(-ERANGE);
-    }
+//     if (iconf->bypass_ring_size == 0) {
+//         SCLogError("%s: positive number for bypass ring size is required", iconf->iface);
+//         SCReturnInt(-ERANGE);
+//     }
 
-    SCReturnInt(0);
-}
+//     SCReturnInt(0);
+// }
 
 static int ConfigSetRxDescriptors(DPDKIfaceConfig *iconf, const char *entry_str, uint16_t max_desc)
 {
@@ -1017,12 +1017,12 @@ static int ConfigLoad(DPDKIfaceConfig *iconf, const char *iface)
     if (retval < 0)
         SCReturnInt(retval);
 
-    retval = SCConfGetChildValueWithDefault(
-                     if_root, if_default, dpdk_yaml.bypass_ring_size, &entry_str) != 1
-                     ? ConfigSetBypassRingSize(iconf, DPDK_CONFIG_DEFAULT_BYPASS_RING_SIZE)
-                     : ConfigSetBypassRingSize(iconf, entry_str);
-    if (retval < 0)
-        SCReturnInt(retval);
+    // retval = SCConfGetChildValueWithDefault(
+    //                  if_root, if_default, dpdk_yaml.bypass_ring_size, &entry_str) != 1
+    //                  ? ConfigSetBypassRingSize(iconf, DPDK_CONFIG_DEFAULT_BYPASS_RING_SIZE)
+    //                  : ConfigSetBypassRingSize(iconf, entry_str);
+    // if (retval < 0)
+    //     SCReturnInt(retval);
 
     retval = SCConfGetChildValueWithDefault(
                      if_root, if_default, dpdk_yaml.mempool_cache_size, &entry_str) != 1

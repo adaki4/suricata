@@ -315,18 +315,28 @@ static inline void DPDKDumpCounters(DPDKThreadVars *ptv)
             return;
         }
 
-        if (!ptv->port_stopped) {
-            RteFlowRuleStorage *drop_filter = ptv->livedev->dpdk_vars->drop_filter;
-            if (drop_filter != NULL) {
-                uint64_t filtered_packets = 0;
-                filtered_packets = RteFlowFilteredPacketsQuery(drop_filter->rule_handlers,
-                        drop_filter->rule_cnt, ptv->livedev->dev, ptv->port_id);
-                if (filtered_packets > 0)
-                    StatsCounterSetI64(
-                            &ptv->tv->stats, ptv->capture_dpdk_rte_flow_filtered, filtered_packets);
-            }
-        }
+        // if (!ptv->port_stopped) {
+        //     RteFlowRuleStorage *drop_filter = ptv->livedev->dpdk_vars->drop_filter;
+        //     if (drop_filter != NULL) {
+        //         uint64_t filtered_packets = 0;
+        //         filtered_packets = RteFlowFilteredPacketsQuery(drop_filter->rule_handlers,
+        //                 drop_filter->rule_cnt, ptv->livedev->dev, ptv->port_id);
+        //         if (filtered_packets > 0)
+        //             StatsCounterSetI64(
+        //                     &ptv->tv->stats, ptv->capture_dpdk_rte_flow_filtered, filtered_packets);
+        //     }
+        // }
 
+        /* Drop-filter stats query removed during Template API migration */
+        // if (!ptv->port_stopped) {
+        //     uint64_t filtered_packets = 0;
+        //     filtered_packets =
+        //             RteFlowFilteredPacketsQuery(ptv->livedev->dpdk_vars->drop_filter->rule_handlers,
+        //                     ptv->livedev->dpdk_vars->drop_filter->rule_cnt, ptv->livedev->dev,
+        //                     ptv->port_id);
+        //     if (retval == 0)
+        //         StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_flow_filtered, filtered_packets);
+        // }
         StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_packets,
                 ptv->pkts + eth_stats.imissed + eth_stats.ierrors + eth_stats.rx_nombuf);
         SC_ATOMIC_SET(ptv->livedev->pkts,
