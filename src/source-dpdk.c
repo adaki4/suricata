@@ -315,18 +315,28 @@ static inline void DPDKDumpCounters(DPDKThreadVars *ptv)
             return;
         }
 
-        if (!ptv->port_stopped) {
-            RteFlowRuleStorage *drop_filter = ptv->livedev->dpdk_vars->drop_filter;
-            if (drop_filter != NULL) {
-                uint64_t filtered_packets = 0;
-                filtered_packets = RteFlowFilteredPacketsQuery(drop_filter->rule_handlers,
-                        drop_filter->rule_cnt, ptv->livedev->dev, ptv->port_id);
-                if (filtered_packets > 0)
-                    StatsCounterSetI64(
-                            &ptv->tv->stats, ptv->capture_dpdk_rte_flow_filtered, filtered_packets);
-            }
-        }
+        // if (!ptv->port_stopped) {
+        //     RteFlowRuleStorage *drop_filter = ptv->livedev->dpdk_vars->drop_filter;
+        //     if (drop_filter != NULL) {
+        //         uint64_t filtered_packets = 0;
+        //         filtered_packets = RteFlowFilteredPacketsQuery(drop_filter->rule_handlers,
+        //                 drop_filter->rule_cnt, ptv->livedev->dev, ptv->port_id);
+        //         if (filtered_packets > 0)
+        //             StatsCounterSetI64(
+        //                     &ptv->tv->stats, ptv->capture_dpdk_rte_flow_filtered, filtered_packets);
+        //     }
+        // }
 
+        /* Drop-filter stats query removed during Template API migration */
+        // if (!ptv->port_stopped) {
+        //     uint64_t filtered_packets = 0;
+        //     filtered_packets =
+        //             RteFlowFilteredPacketsQuery(ptv->livedev->dpdk_vars->drop_filter->rule_handlers,
+        //                     ptv->livedev->dpdk_vars->drop_filter->rule_cnt, ptv->livedev->dev,
+        //                     ptv->port_id);
+        //     if (retval == 0)
+        //         StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_flow_filtered, filtered_packets);
+        // }
         StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_packets,
                 ptv->pkts + eth_stats.imissed + eth_stats.ierrors + eth_stats.rx_nombuf);
         SC_ATOMIC_SET(ptv->livedev->pkts,
@@ -826,6 +836,19 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
 
         /* some PMDs requires additional actions only after the device has started */
         retval = DevicePostStartPMDSpecificActions(ptv, dpdk_config, dev_info.driver_name);
+        if (retval != 0) {
+            goto fail;
+        }
+
+        /* Create the group-0 -> group-1 jump rule now that the device is
+         * started. The mlx5 HWS PMD requires rte_eth_dev_start() before the
+         * root-table JUMP rule can be inserted (see conntrack-example.c which
+         * starts the device before creating flow rules). RteBypassInit ran
+         * earlier (during DeviceConfigure) and set up the Template API
+         * resources + group-1 table; the jump rule is deferred to here.
+         * Access the bypass data via the LiveDevice (dpdk_dev_resources was
+         * moved off dpdk_config after DeviceConfigure). */
+        retval = RteFlowBypassPostStartInit(ptv->livedev->dpdk_vars->rte_flow_bypass_data);
         if (retval != 0) {
             goto fail;
         }
