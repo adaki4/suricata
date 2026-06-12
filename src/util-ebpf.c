@@ -121,12 +121,13 @@ static void BypassedListFree(void *ifl)
     }
 }
 
-void EBPFDeleteKey(int fd, void *key)
+void EBPFDeleteKey(int fd, void *key, LiveDevice *ld)
 {
     int ret = bpf_map_delete_elem(fd, key);
     if (ret < 0) {
         SCLogWarning("Unable to delete entry: %s (%d)", strerror(errno), errno);
     }
+    SC_ATOMIC_ADD(ld->bypass_delete, 1);
 }
 
 static struct bpf_maps_info *EBPFGetBpfMap(const char *iface)
@@ -668,8 +669,8 @@ bool EBPFBypassUpdate(Flow *f, void *data, time_t tsec)
     if (!activity) {
         SCLogDebug("Delete entry: %u (%" PRIu64 ")", FLOW_IS_IPV6(f), FlowGetId(f));
         /* delete the entries if no time update */
-        EBPFDeleteKey(eb->mapfd, eb->key[0]);
-        EBPFDeleteKey(eb->mapfd, eb->key[1]);
+        EBPFDeleteKey(eb->mapfd, eb->key[0], LiveDeviceGetById(f->livedev_id));
+        EBPFDeleteKey(eb->mapfd, eb->key[1], LiveDeviceGetById(f->livedev_id));
         SCLogDebug("Done delete entry: %u", FLOW_IS_IPV6(f));
     } else {
         f->lastts = SCTIME_FROM_SECS(tsec);
@@ -715,7 +716,7 @@ static int EBPFForEachFlowV4Table(ThreadVars *th_v, LiveDevice *dev, const char 
         uint64_t pkts_cnt = 0;
         hash_cnt++;
         if (dead_flow) {
-            EBPFDeleteKey(mapfd, &key);
+            EBPFDeleteKey(mapfd, &key, dev);
             dead_flow = false;
         }
         /* We use a per CPU structure so we will get a array of values. But if nr_cpus
@@ -782,7 +783,7 @@ static int EBPFForEachFlowV4Table(ThreadVars *th_v, LiveDevice *dev, const char 
         key = next_key;
     }
     if (dead_flow) {
-        EBPFDeleteKey(mapfd, &key);
+        EBPFDeleteKey(mapfd, &key, dev);
         found = 1;
     }
     SC_ATOMIC_ADD(dev->bypassed, flowstats.packets);
@@ -826,7 +827,7 @@ static int EBPFForEachFlowV6Table(ThreadVars *th_v,
         uint64_t bytes_cnt = 0;
         hash_cnt++;
         if (pkts_cnt > 0) {
-            EBPFDeleteKey(mapfd, &key);
+            EBPFDeleteKey(mapfd, &key, dev);
         }
         pkts_cnt = 0;
         /* We use a per CPU structure so we will get a array of values. But if nr_cpus
@@ -900,7 +901,7 @@ static int EBPFForEachFlowV6Table(ThreadVars *th_v,
         key = next_key;
     }
     if (pkts_cnt > 0) {
-        EBPFDeleteKey(mapfd, &key);
+        EBPFDeleteKey(mapfd, &key, dev);
         found = 1;
     }
     SC_ATOMIC_ADD(dev->bypassed, flowstats.packets);

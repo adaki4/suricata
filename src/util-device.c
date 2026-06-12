@@ -156,6 +156,8 @@ int LiveRegisterDevice(const char *dev)
     SC_ATOMIC_INIT(pd->pkts);
     SC_ATOMIC_INIT(pd->drop);
     SC_ATOMIC_INIT(pd->invalid_checksums);
+    SC_ATOMIC_INIT(pd->bypass_delete);
+    SC_ATOMIC_INIT(pd->bypass_private_move);
     pd->id = (uint16_t)id;
     TAILQ_INSERT_TAIL(&live_devices, pd, next);
 

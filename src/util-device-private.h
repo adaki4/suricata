@@ -41,6 +41,8 @@ typedef struct LiveDevice_ {
     SC_ATOMIC_DECLARE(uint64_t, drop);
     SC_ATOMIC_DECLARE(uint64_t, bypassed);
     SC_ATOMIC_DECLARE(uint64_t, invalid_checksums);
+    SC_ATOMIC_DECLARE(uint64_t, bypass_delete);
+    SC_ATOMIC_DECLARE(uint64_t, bypass_private_move);
     TAILQ_ENTRY(LiveDevice_) next;
 
     uint32_t tenant_id;    /**< tenant id in multi-tenancy */
