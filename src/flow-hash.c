@@ -953,6 +953,9 @@ Flow *FlowGetFlowFromHash(ThreadVars *tv, FlowLookupStruct *fls, Packet *p, Flow
             if (timedout) {
                 next_f = f->next;
                 MoveToWorkQueue(tv, fls, fb, f, prev_f);
+                if (f->flow_state == FLOW_STATE_CAPTURE_BYPASSED) {
+                    SC_ATOMIC_ADD(LiveDeviceGetById(f->livedev_id)->bypass_private_move, 1);
+                }
                 FLOWLOCK_UNLOCK(f);
                 goto flow_removed;
             } else if (our_flow) {

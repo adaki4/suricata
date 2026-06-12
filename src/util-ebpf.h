@@ -26,6 +26,7 @@
 
 #include "flow-bypass.h"
 #include "conf.h"
+#include "util-device.h"
 
 #ifdef HAVE_PACKET_EBPF
 
@@ -92,7 +93,7 @@ int EBPFUpdateFlow(Flow *f, Packet *p, void *data);
 bool EBPFBypassUpdate(Flow *f, void *data, time_t tsec);
 void EBPFBypassFree(void *data);
 
-void EBPFDeleteKey(int fd, void *key);
+void EBPFDeleteKey(int fd, void *key, LiveDevice *ld);
 
 #define __bpf_percpu_val_align  __attribute__((__aligned__(8)))
 
