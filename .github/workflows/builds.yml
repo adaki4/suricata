@@ -2966,7 +2966,7 @@ jobs:
         run: python3 ./suricata-verify/run.py -q --debug-failed
       - run: ulimit -a
       - name: Running suricata-verify live tests
-        run: sudo python3 ./suricata-verify/run.py --live --debug-failed
+        run: sudo python3 ./suricata-verify/run.py --live lo --debug-failed
 
   debian-12:
     name: Debian 12 (xdp)
