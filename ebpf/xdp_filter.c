@@ -491,6 +491,7 @@ int SEC("xdp") xdp_hashfilter(struct xdp_md *ctx)
     __u64 nh_off;
     __u16 vlan0 = 0;
     __u16 vlan1 = 0;
+    bpf_printk("packet received", sizeof("packet received"));
 #if USE_GLOBAL_BYPASS
     int *iface_peer;
     char *g_switch = 0;
