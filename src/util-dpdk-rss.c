@@ -33,9 +33,9 @@
 #include "util-dpdk-rss.h"
 #include "util-dpdk.h"
 #include "util-debug.h"
+#include "util-dpdk-rte-flow.h"
 
 #ifdef HAVE_DPDK
-#define RTE_JUMP_GROUP 1
 
 uint8_t RSS_HKEY[] = {
     0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
@@ -84,139 +84,6 @@ struct rte_flow_action_rss DPDKInitRSSAction(struct rte_eth_rss_conf rss_conf, i
     return rss_action_conf;
 }
 
-#if RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0)
-/**
- * \brief Create an RSS rte_flow rule using the Template API.
- *
- * Creates pattern template, actions template, and template table,
- * then inserts the RSS rule via rte_flow_async_create + rte_flow_push.
- * Template handles are stored in rss_tmpl for later cleanup.
- *
- * \param port_id          The port identifier
- * \param port_name        The port name for logging
- * \param rss_conf         RSS action configuration
- * \param rss_type         RSS hash type
- * \param pattern          Pattern to match
- * \param nb_pattern_items Number of items in pattern (including END)
- * \param rss_tmpl         Output: template resources for cleanup
- * \return 0 on success, negative errno on failure
- */
-int DPDKCreateRSSFlowTemplate(int port_id, const char *port_name,
-        struct rte_flow_action_rss rss_conf, uint64_t rss_type,
-        struct rte_flow_item *pattern, int nb_pattern_items,
-        RteFlowRSSTemplateResources *rss_tmpl)
-{
-    struct rte_flow_error flow_error = { 0 };
-    struct rte_flow_attr attr = {
-        .ingress = 1,
-        .priority = 1,
-        .group = 0,
-    };
-
-    rss_conf.types = rss_type;
-
-    /* Configure the port for Template API (may already be configured by bypass init) */
-    struct rte_flow_port_attr port_attr = {
-        .nb_conn_tracks = 0,
-        .nb_counters = 0,
-    };
-    struct rte_flow_queue_attr queue_attr = { .size = 0 };
-    const struct rte_flow_queue_attr *queue_attrs[] = { &queue_attr };
-    int ret = rte_flow_configure(port_id, &port_attr, queue_attrs, 1, &flow_error);
-    if (ret != 0 && ret != -EEXIST) {
-        SCLogError("%s: rte_flow_configure failed: %s", port_name, flow_error.message);
-        return ret;
-    }
-
-    /* --- Pattern Template --- */
-    struct rte_flow_pattern_template_attr pt_attr = {
-        .relaxed_matching = 0,
-        .ingress = 1,
-    };
-
-    rss_tmpl->pt = rte_flow_pattern_template_create(
-            port_id, &pt_attr, pattern, &flow_error);
-    if (rss_tmpl->pt == NULL) {
-        SCLogError("%s: RSS pattern template create error: %s",
-                port_name, flow_error.message);
-        return -1;
-    }
-
-    /* --- Actions Template --- */
-    struct rte_flow_action actions[] = {
-        [0] = { .type = RTE_FLOW_ACTION_TYPE_RSS, .conf = &rss_conf },
-        [1] = { .type = RTE_FLOW_ACTION_TYPE_END },
-    };
-
-    struct rte_flow_actions_template_attr at_attr = {
-        .ingress = 1,
-    };
-
-    /* --- Masks Template --- */
-    struct rte_flow_action masks[] = {
-        [0] = { .type = RTE_FLOW_ACTION_TYPE_RSS, .conf = &rss_conf },
-        [1] = { .type = RTE_FLOW_ACTION_TYPE_END },
-    };
-
-    rss_tmpl->at = rte_flow_actions_template_create(
-            port_id, &at_attr, actions, masks, &flow_error);
-    if (rss_tmpl->at == NULL) {
-        SCLogError("%s: RSS actions template create error: %s",
-                port_name, flow_error.message);
-        rte_flow_pattern_template_destroy(port_id, rss_tmpl->pt, &flow_error);
-        rss_tmpl->pt = NULL;
-        return -1;
-    }
-
-    /* --- Template Table --- */
-    struct rte_flow_template_table_attr tbl_attr = {
-        .flow_attr = attr,
-        .nb_flows = 1,  /* RSS rules are singletons */
-    };
-
-    rss_tmpl->tbl = rte_flow_template_table_create(
-            port_id, &tbl_attr, &rss_tmpl->pt, 1, &rss_tmpl->at, 1, &flow_error);
-    if (rss_tmpl->tbl == NULL) {
-        SCLogError("%s: RSS template table create error: %s",
-                port_name, flow_error.message);
-        rte_flow_actions_template_destroy(port_id, rss_tmpl->at, &flow_error);
-        rte_flow_pattern_template_destroy(port_id, rss_tmpl->pt, &flow_error);
-        rss_tmpl->at = NULL;
-        rss_tmpl->pt = NULL;
-        return -1;
-    }
-
-    /* --- Async Create --- */
-    struct rte_flow_op_attr op_attr = { .postpone = 0 };
-    struct rte_flow *flow = rte_flow_async_create(
-            port_id, 0, &op_attr, rss_tmpl->tbl,
-            pattern, 0, NULL, 0, NULL, &flow_error);
-    if (flow == NULL) {
-        SCLogError("%s: RSS async create error: %s", port_name, flow_error.message);
-        rte_flow_template_table_destroy(port_id, rss_tmpl->tbl, &flow_error);
-        rte_flow_actions_template_destroy(port_id, rss_tmpl->at, &flow_error);
-        rte_flow_pattern_template_destroy(port_id, rss_tmpl->pt, &flow_error);
-        memset(rss_tmpl, 0, sizeof(*rss_tmpl));
-        return -1;
-    }
-
-    ret = rte_flow_push(port_id, 0, &flow_error);
-    if (ret < 0) {
-        SCLogError("%s: RSS push error: %s", port_name, flow_error.message);
-        rte_flow_template_table_destroy(port_id, rss_tmpl->tbl, &flow_error);
-        rte_flow_actions_template_destroy(port_id, rss_tmpl->at, &flow_error);
-        rte_flow_pattern_template_destroy(port_id, rss_tmpl->pt, &flow_error);
-        memset(rss_tmpl, 0, sizeof(*rss_tmpl));
-        return -1;
-    }
-
-    rte_flow_pull(port_id, 0, NULL, 0, &flow_error);
-
-    SCLogDebug("%s: RSS rte_flow rule created via Template API", port_name);
-    return 0;
-}
-#endif /* RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0) */
-
 /**
  * \brief Creates RTE_FLOW RSS rule used by NIC drivers
  *        to redistribute packets to different queues based
@@ -225,39 +92,29 @@ int DPDKCreateRSSFlowTemplate(int port_id, const char *port_name,
  * \param port_id The port identifier of the Ethernet device
  * \param port_name The port name of the Ethernet device
  * \param rss_conf RSS configuration
+ * \param group rte_flow group to create the rule in
  * \return int 0 on success, a negative errno value otherwise
  */
 int DPDKCreateRSSFlowGeneric(
-        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf)
+        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf, uint32_t group)
 {
-    struct rte_flow_item pattern[] = { { 0 }, { 0 } };
-
-    rss_conf.types = RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_IPV6;
-    pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
-    pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
-
-#if RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0)
-    RteFlowRSSTemplateResources rss_tmpl = { 0 };
-    int ret = DPDKCreateRSSFlowTemplate(port_id, port_name, rss_conf,
-            RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_IPV6, pattern, 2, &rss_tmpl);
-    if (ret == 0) {
-        /* Store template resources for cleanup — caller must provide storage */
-        /* Note: For mlx5, the caller (mlx5DeviceSetRSS) should store rss_tmpl */
-    }
-    return ret;
-#else
-    /* Fallback: classic API */
     struct rte_flow_attr attr = { 0 };
     struct rte_flow_action action[] = { { 0 }, { 0 } };
     struct rte_flow_error flow_error = { 0 };
+    struct rte_flow_item pattern[] = { { 0 }, { 0 } };
+
+    rss_conf.types = RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_IPV6;
 
     attr.ingress = 1;
     attr.priority = 1;
-    attr.group = RTE_JUMP_GROUP;
+    attr.group = group;
 
     action[0].type = RTE_FLOW_ACTION_TYPE_RSS;
     action[0].conf = &rss_conf;
     action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+    pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+    pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
 
     struct rte_flow *flow = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
     if (flow == NULL) {
@@ -271,7 +128,6 @@ int DPDKCreateRSSFlowGeneric(
     }
 
     return 0;
-#endif
 }
 
 /**
@@ -290,28 +146,11 @@ int DPDKCreateRSSFlowGeneric(
 int DPDKCreateRSSFlow(int port_id, const char *port_name, struct rte_flow_action_rss rss_conf,
         uint64_t rss_type, struct rte_flow_item *pattern)
 {
-    rss_conf.types = rss_type;
-
-    /* Count pattern items */
-    int nb_items = 0;
-    while (pattern[nb_items].type != RTE_FLOW_ITEM_TYPE_END)
-        nb_items++;
-    nb_items++; /* include END */
-
-#if RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0)
-    RteFlowRSSTemplateResources rss_tmpl = { 0 };
-    int ret = DPDKCreateRSSFlowTemplate(port_id, port_name, rss_conf,
-            rss_type, pattern, nb_items, &rss_tmpl);
-    if (ret == 0) {
-        /* Store template resources for cleanup — caller must provide storage */
-        /* Note: For ice, the caller (iceDeviceSetRSS) should store rss_tmpl */
-    }
-    return ret;
-#else
-    /* Fallback: classic API */
     struct rte_flow_attr attr = { 0 };
     struct rte_flow_action action[] = { { 0 }, { 0 } };
     struct rte_flow_error flow_error = { 0 };
+
+    rss_conf.types = rss_type;
 
     attr.ingress = 1;
     action[0].type = RTE_FLOW_ACTION_TYPE_RSS;
@@ -330,7 +169,6 @@ int DPDKCreateRSSFlow(int port_id, const char *port_name, struct rte_flow_action
     }
 
     return 0;
-#endif
 }
 
 /**
@@ -346,26 +184,15 @@ int DPDKCreateRSSFlow(int port_id, const char *port_name, struct rte_flow_action
  */
 int DPDKSetRSSFlowQueues(int port_id, const char *port_name, struct rte_flow_action_rss rss_conf)
 {
-    struct rte_flow_item pattern[] = { { 0 } };
-
-    rss_conf.types = 0; // queues region can not be configured with types
-    pattern[0].type = RTE_FLOW_ITEM_TYPE_END;
-
-#if RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0)
-    RteFlowRSSTemplateResources rss_tmpl = { 0 };
-    int ret = DPDKCreateRSSFlowTemplate(port_id, port_name, rss_conf,
-            0, pattern, 1, &rss_tmpl);
-    if (ret == 0) {
-        /* Store template resources for cleanup — caller must provide storage */
-    }
-    return ret;
-#else
-    /* Fallback: classic API */
     struct rte_flow_attr attr = { 0 };
+    struct rte_flow_item pattern[] = { { 0 } };
     struct rte_flow_action action[] = { { 0 }, { 0 } };
     struct rte_flow_error flow_error = { 0 };
 
+    rss_conf.types = 0; // queues region can not be configured with types
+
     attr.ingress = 1;
+    pattern[0].type = RTE_FLOW_ITEM_TYPE_END;
     action[0].type = RTE_FLOW_ACTION_TYPE_RSS;
     action[0].conf = &rss_conf;
     action[1].type = RTE_FLOW_ACTION_TYPE_END;
@@ -381,7 +208,86 @@ int DPDKSetRSSFlowQueues(int port_id, const char *port_name, struct rte_flow_act
         SCLogDebug("%s: rte_flow rule created", port_name);
     }
     return 0;
-#endif
+}
+
+int DPDKInitRSSTemplate(uint16_t port_id, RteFlowBypassData *bypass_data)
+{
+    SCEnter();
+
+    RteFlowTemplateResources *rss_resources = SCCalloc(1, sizeof(RteFlowTemplateResources));
+    if (rss_resources == NULL) {
+        SCLogError("rte_flow bypass: Failed to allocate memory for bypass async resources");
+        SCReturnInt(-ENOMEM);
+    }
+
+ 	struct rte_flow_action actions[] = {
+		{ .type = RTE_FLOW_ACTION_TYPE_RSS },
+		{ .type = RTE_FLOW_ACTION_TYPE_END }
+	};
+
+    struct rte_flow_action actions_mask[] = {
+		{ .type = RTE_FLOW_ACTION_TYPE_RSS },
+		{ .type = RTE_FLOW_ACTION_TYPE_END }
+	};
+
+	struct rte_flow_item pattern[] = {
+        { .type = RTE_FLOW_ITEM_TYPE_ETH },
+        { .type = RTE_FLOW_ITEM_TYPE_END },
+    };
+
+	rss_resources->pt[RTE_PATTERN_TEMPLATE_DEFAULT] = RteFlowCreatePatternTemplate(port_id, pattern);
+	rss_resources->at = RteFlowCreateActionTemplate(port_id, actions, actions_mask);
+	if (rss_resources->pt[RTE_PATTERN_TEMPLATE_DEFAULT] == NULL|| rss_resources->at == NULL)
+        goto cleanup;
+    rss_resources->tbl = RteFlowCreateTemplateTable(port_id, RTE_JUMP_GROUP, RTE_RULE_PRIORITY_1, 1, &rss_resources->pt[RTE_PATTERN_TEMPLATE_DEFAULT], 1, &rss_resources->at, 1);
+    if (rss_resources->tbl == NULL)
+        goto cleanup;
+    bypass_data->rss_resources = rss_resources;
+    SCReturnInt(0);
+
+cleanup:
+    SCLogError("rte_flow bypass: rss rule template failed");
+    RteFlowTemplateResourcesFree(port_id, bypass_data->rss_resources);
+    bypass_data->rss_resources = NULL;
+    SCReturnInt(-1);
+}
+
+int DPDKCreateRSSFlowAsync(uint16_t port_id, const char *port_name, struct rte_flow_action_rss rss_conf, uint32_t group, RteFlowBypassData *bypass_data)
+{
+	struct rte_flow_item pattern[] = {
+        { .type = RTE_FLOW_ITEM_TYPE_ETH },
+        { .type = RTE_FLOW_ITEM_TYPE_END },
+    };
+
+	struct rte_flow_action actions[] = {
+		{ .type = RTE_FLOW_ACTION_TYPE_RSS, .conf = &rss_conf },
+		{ .type = RTE_FLOW_ACTION_TYPE_END }
+	};
+
+    rss_conf.types = RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_IPV6;
+
+	struct rte_flow *rule_handle = RteFlowCreateRuleAsync(port_id, RTE_FLOW_QUEUE_ID, bypass_data->rss_resources->tbl,
+								   pattern, RTE_PATTERN_TEMPLATE_DEFAULT, actions, RTE_ACTIONS_TEMPLATE_DEFAULT, NULL);
+    if (rule_handle == NULL) {
+        // RteFlowActionHandleDestroyFlow(bypass_data, port_id, NULL);
+        SCReturnInt(-1);
+    }
+    
+    struct rte_flow_error flow_error = { 0 };
+    struct rte_flow_op_result res = {0};
+    /* Wait for the rule to take effect so we can check the result */
+    rte_delay_ms(500);
+    int retval = rte_flow_pull(port_id, RTE_FLOW_QUEUE_ID, &res, 1, &flow_error);
+    if (retval < 0) {
+        SCLogError("%s: rte_flow_pull RSS error: %s", port_name, rte_strerror(-retval));
+        SCReturnInt(retval);
+    } else if (retval > 0) {
+        SCLogInfo("%s: result for RSS rule: %d", port_name, res.status);
+    } else {
+        SCLogInfo("%s: No result for RSS rule yet", port_name);
+    }
+    SCReturnInt(0);
+
 }
 
 #endif /* HAVE_DPDK */

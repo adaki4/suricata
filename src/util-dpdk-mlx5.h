@@ -25,13 +25,13 @@
 #define UTIL_DPDK_MLX5_H
 
 #include "suricata-common.h"
+#include "util-dpdk-rte-flow-structs.h"
 
 #ifdef HAVE_DPDK
 
 #define MLX5_RTE_FLOW_RULES_CAPACITY 4194304
 
-int mlx5DeviceSetRSS(int port_id, uint16_t nb_rx_queues, char *port_name);
-int mlx5DeviceCheckDropFilterLimits(uint32_t rte_flow_rule_count, char **err_msg);
+int mlx5DevicePostStartActions(int port_id, uint16_t nb_rx_queues, char *port_name, bool capture_bypass_enabled, RteFlowBypassData *rte_flow_bypass_data);
 
 #endif /* HAVE_DPDK */
 

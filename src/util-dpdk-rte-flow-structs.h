@@ -37,39 +37,41 @@
 #include "suricata-common.h"
 #include "util-dpdk-common.h"
 
-typedef struct RteFlowRuleStorage_ {
-    uint32_t rule_cnt;
-    uint32_t rule_size;
-    char **rules;
-    struct rte_flow **rule_handlers;
-} RteFlowRuleStorage;
+#define RTE_PATTERN_TEMPLATES_MAX_CNT 2
+#define RTE_PATTERN_TEMPLATE_DEFAULT 0
+#define RTE_PATTERN_TEMPLATE_TCP 0
+#define RTE_PATTERN_TEMPLATE_UDP 1
+
+#define RTE_ACTIONS_TEMPLATE_DEFAULT 0
+
+typedef struct RteFlowTemplateResources_ {
+    struct rte_flow_template_table *tbl;
+    struct rte_flow_pattern_template *pt[RTE_PATTERN_TEMPLATES_MAX_CNT];
+    uint16_t pt_cnt; 
+    struct rte_flow_actions_template *at;
+} RteFlowTemplateResources;
 
 typedef struct RteFlowBypassData_ {
     struct rte_mempool *bypass_info_mp;
     struct rte_mempool *bypass_mp;
     struct rte_ring *bypass_ring;
     uint32_t rte_bypass_rule_capacity;
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_created);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_active);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_mempool_get_error);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_info_mempool_get_error);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flow_error);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_unchecked);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flows_bypass_success);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flows_bypass_error);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flow_lookup_error);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_mempool_key_get_error);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_mempool_info_get_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_query_error);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_enqueue_error);
-    /* Template API handles (DPDK 22.11+) */
-    struct rte_flow_template_table *bypass_tbl;
-    struct rte_flow_pattern_template *bypass_pt;
-    struct rte_flow_actions_template *bypass_at;
-    struct rte_flow_op_attr op_attr;
+    RteFlowTemplateResources *rss_resources;
+    RteFlowTemplateResources *jump_resources;
+    RteFlowTemplateResources *bypass_resources_ipv4;
+    RteFlowTemplateResources *bypass_resources_ipv6;
     uint16_t port_id;
-    bool template_api_available;
-    /* Jump rule (group 0 -> group 1) Template API handles */
-    struct rte_flow_template_table *jump_tbl;
-    struct rte_flow_pattern_template *jump_pt;
-    struct rte_flow_actions_template *jump_at;
-    struct rte_flow *jump_flow;
-    struct rte_flow_action_handle *jump_count_handle; /* per-rule indirect COUNT for the jump rule */
+
 } RteFlowBypassData;
 
 /** \brief Holds RSS Template API resources for cleanup on device close */
