@@ -148,7 +148,6 @@ DPDKIfaceConfigAttributes dpdk_yaml = {
     .tx_descriptors = "tx-descriptors",
     .copy_mode = "copy-mode",
     .copy_iface = "copy-iface",
-    .drop_filter = "drop-filter",
     .capture_bypass = "capture-bypass",
 };
 
@@ -340,7 +339,6 @@ static void DPDKDerefConfig(void *conf)
             }
         }
         DPDKDeviceResourcesDeinit(&iconf->dpdk_dev_resources);
-        // iconf->RteRulesFree(&iconf->drop_filter);
         SCFree(iconf);
     }
     SCReturn;
@@ -358,7 +356,6 @@ static void ConfigInit(DPDKIfaceConfig **iconf)
     SC_ATOMIC_INIT(ptr->ref);
     (void)SC_ATOMIC_ADD(ptr->ref, 1);
     ptr->DerefFunc = DPDKDerefConfig;
-    // ptr->RteRulesFree = RteFlowRuleStorageFree;
     ptr->flags = 0;
 
     *iconf = ptr;
@@ -1097,11 +1094,6 @@ static int ConfigLoad(DPDKIfaceConfig *iconf, const char *iface)
     if (retval < 0)
         SCReturnInt(retval);
 
-    /* Drop-filter YAML parsing removed during Template API migration */
-    // retval = ConfigLoadRteFlowRules(if_root, dpdk_yaml.drop_filter, &iconf->drop_filter);
-    // if (retval < 0)
-    //     SCReturnInt(retval);
-
     /* Global flag dpdk.capture-bypass is set to each interface */
     retval = ConfigSetCaptureBypass(iconf);
     if (retval < 0)
@@ -1701,8 +1693,16 @@ static int DeviceConfigureDynamicBypass(
     const char *driver_name = dev_info->driver_name;
     if (strcmp(driver_name, "mlx5_pci") == 0) {
         retval = RteBypassInit(iconf, driver_name);
+        if (retval < 0) {
+            SCLogError("%s: rte bypass init failed", iconf->iface);
+            SCReturnInt(retval);
+        }
+        retval = DPDKInitRSSTemplate(iconf->port_id, iconf->dpdk_dev_resources->rte_flow_bypass_data);
+        if (retval < 0) {
+            SCLogError("%s: rte_flow rss async init failed", iconf->iface);
+            SCReturnInt(retval);
+        }
     }
-
     if (retval == 0)
         SCLogConfig("%s rte_flow capture bypass enabled", iconf->iface);
     SCReturnInt(retval);

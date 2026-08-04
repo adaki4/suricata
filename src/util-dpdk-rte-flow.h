@@ -41,30 +41,31 @@
 #include "util-dpdk-common.h"
 #include "util-dpdk-rte-flow-structs.h"
 
-/* Drop-filter functions — commented out during Template API migration */
-void RteFlowRuleStorageFree(RteFlowRuleStorage *rule_storage);
-int ConfigLoadRteFlowRules(
-        SCConfNode *if_root, const char *drop_filter_str, RteFlowRuleStorage *rule_storage);
-int RteFlowRulesCreate(uint16_t port_id, RteFlowRuleStorage *rule_storage, const char *driver_name);
-uint64_t RteFlowFilteredPacketsQuery(
-        struct rte_flow **rules, uint32_t rule_count, const char *device_name, int port_id);
 int ConfigSetCaptureBypass(DPDKIfaceConfig *);
 int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name);
-int RteFlowBypassPostStartInit(RteFlowBypassData *rte_flow_bypass_data);
 int RteFlowBypassCallback(Packet *);
-int RteFlowBypassRuleLoad(
-        ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
 bool RteBypassUpdate(Flow *flow, void *data, time_t tsec);
 void RteBypassFree(void *data);
+int RteFlowCreateJumpRule(uint16_t, const char *, RteFlowBypassData *rte_flow_bypass_data);
 
 /* Template API resource management */
-int RteFlowTemplateResourcesInit(RteFlowBypassData *data, uint16_t port_id);
-void RteFlowTemplateResourcesFree(RteFlowBypassData *data);
+struct rte_flow *RteFlowCreateRuleAsync(int port_id, uint32_t queue_id, struct rte_flow_template_table *table,
+				  struct rte_flow_item *pattern, uint8_t pt_index, struct rte_flow_action *actions, uint8_t at_index, void *user_data);
+int RteFlowTemplateResourcesInit(uint16_t port_id, RteFlowBypassData *data);
+void RteFlowTemplateResourcesFree(uint16_t port_id, RteFlowTemplateResources *template_resources);
 
-/* Jump rule (group 0 -> group 1) async creation */
-int RteFlowJumpRuleTemplateInit(RteFlowBypassData *data);
-int RteFlowJumpRuleInit(RteFlowBypassData *data);
-void RteFlowJumpRuleFree(RteFlowBypassData *data);
+/* Template creation helpers */
+void RteFlowActionHandleDestroyFlow(RteFlowBypassData *rte_flow_bypass_data,
+        uint16_t port_id, struct rte_flow_action_handle *action_handle);
+struct rte_flow_pattern_template *
+RteFlowCreatePatternTemplate(int, struct rte_flow_item *);
+struct rte_flow_actions_template *
+RteFlowCreateActionTemplate(int, struct rte_flow_action *,
+        struct rte_flow_action *);
+struct rte_flow_template_table *
+RteFlowCreateTemplateTable(int, uint32_t, uint32_t, uint32_t,
+        struct rte_flow_pattern_template **, uint32_t,
+        struct rte_flow_actions_template **, uint32_t);
 
 #endif /* HAVE_DPDK */
 #endif /* SURICATA_RTE_FLOW_RULES_H */

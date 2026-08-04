@@ -206,6 +206,7 @@ static inline void DPDKFreeMbufArray(
 static int DevicePostStartPMDSpecificActions(
         DPDKThreadVars *ptv, DPDKIfaceConfig *dpdk_config, const char *driver_name)
 {
+    int retval = 0;
     if (strcmp(driver_name, "net_bonding") == 0)
         driver_name = BondingDeviceDriverGet(ptv->port_id);
     if (strcmp(driver_name, "net_i40e") == 0)
@@ -214,19 +215,12 @@ static int DevicePostStartPMDSpecificActions(
         ixgbeDeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
     else if (strcmp(driver_name, "net_ice") == 0)
         iceDeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
-    else if (strcmp(driver_name, "mlx5_pci") == 0)
-        mlx5DeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
+    else if (strcmp(driver_name, "mlx5_pci") == 0) {
+        RteFlowBypassData *bypass_data = ptv->livedev->dpdk_vars->rte_flow_bypass_data;
+        retval = mlx5DevicePostStartActions(ptv->port_id, ptv->threads, ptv->livedev->dev, dpdk_config->capture_bypass_enabled, bypass_data);
+    }
 
-    /* Drop-filter rule creation removed during Template API migration */
-    // if ((strcmp(driver_name, "mlx5_pci") == 0 || strcmp(driver_name, "net_ice") == 0 ||
-    //             strcmp(driver_name, "net_i40e") == 0)) {
-    //     int retval =
-    //             RteFlowRulesCreate(dpdk_config->port_id, &dpdk_config->drop_filter, driver_name);
-    //     if (retval != 0)
-    //         SCReturnInt(retval);
-    //     ptv->livedev->dpdk_vars->drop_filter = &dpdk_config->drop_filter;
-    // }
-    SCReturnInt(0);
+    SCReturnInt(retval);
 }
 
 static void DevicePreClosePMDSpecificActions(DPDKThreadVars *ptv, const char *driver_name)
@@ -315,28 +309,6 @@ static inline void DPDKDumpCounters(DPDKThreadVars *ptv)
             return;
         }
 
-        // if (!ptv->port_stopped) {
-        //     RteFlowRuleStorage *drop_filter = ptv->livedev->dpdk_vars->drop_filter;
-        //     if (drop_filter != NULL) {
-        //         uint64_t filtered_packets = 0;
-        //         filtered_packets = RteFlowFilteredPacketsQuery(drop_filter->rule_handlers,
-        //                 drop_filter->rule_cnt, ptv->livedev->dev, ptv->port_id);
-        //         if (filtered_packets > 0)
-        //             StatsCounterSetI64(
-        //                     &ptv->tv->stats, ptv->capture_dpdk_rte_flow_filtered, filtered_packets);
-        //     }
-        // }
-
-        /* Drop-filter stats query removed during Template API migration */
-        // if (!ptv->port_stopped) {
-        //     uint64_t filtered_packets = 0;
-        //     filtered_packets =
-        //             RteFlowFilteredPacketsQuery(ptv->livedev->dpdk_vars->drop_filter->rule_handlers,
-        //                     ptv->livedev->dpdk_vars->drop_filter->rule_cnt, ptv->livedev->dev,
-        //                     ptv->port_id);
-        //     if (retval == 0)
-        //         StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_flow_filtered, filtered_packets);
-        // }
         StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_packets,
                 ptv->pkts + eth_stats.imissed + eth_stats.ierrors + eth_stats.rx_nombuf);
         SC_ATOMIC_SET(ptv->livedev->pkts,
@@ -354,14 +326,6 @@ static inline void DPDKDumpCounters(DPDKThreadVars *ptv)
 
             StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_rules_error,
                     SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_error));
-            StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_enqueue_error,
-                    SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_enqueue_error));
-            StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_info_mempool_get_error,
-                    SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_info_mempool_get_error));
-            StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_mempool_get_error,
-                    SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_mempool_get_error));
-            StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_flow_error,
-                    SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_flow_error));
             StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_query_error,
                     SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_query_error));
             StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rtee_flow_rules_created,
@@ -603,6 +567,7 @@ static void HandleShutdown(DPDKThreadVars *ptv)
     // Dump counters while device is still running - some drivers (e.g. BNXT) fail
     // to report stats after the device is stopped
     DPDKDumpCounters(ptv);
+    SCLogInfo("%s: worker processed %" PRIu64 " packets", ptv->tv->name, ptv->pkts);
     if (ptv->queue_id == 0) {
         PrintDPDKPortXstats(ptv->port_id, ptv->livedev->dev);
         rte_delay_us(20); // wait for all threads to get out of the sync loop
@@ -836,19 +801,6 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
 
         /* some PMDs requires additional actions only after the device has started */
         retval = DevicePostStartPMDSpecificActions(ptv, dpdk_config, dev_info.driver_name);
-        if (retval != 0) {
-            goto fail;
-        }
-
-        /* Create the group-0 -> group-1 jump rule now that the device is
-         * started. The mlx5 HWS PMD requires rte_eth_dev_start() before the
-         * root-table JUMP rule can be inserted (see conntrack-example.c which
-         * starts the device before creating flow rules). RteBypassInit ran
-         * earlier (during DeviceConfigure) and set up the Template API
-         * resources + group-1 table; the jump rule is deferred to here.
-         * Access the bypass data via the LiveDevice (dpdk_dev_resources was
-         * moved off dpdk_config after DeviceConfigure). */
-        retval = RteFlowBypassPostStartInit(ptv->livedev->dpdk_vars->rte_flow_bypass_data);
         if (retval != 0) {
             goto fail;
         }

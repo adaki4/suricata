@@ -76,7 +76,6 @@ typedef struct DPDKIfaceConfig_ {
     bool mempool_cache_size_auto; // auto cache size based on mempool size
     DPDKDeviceResources *dpdk_dev_resources;
     uint16_t linkup_timeout; // in seconds how long to wait for link to come up
-    RteFlowRuleStorage drop_filter;
     bool capture_bypass_enabled;
     SC_ATOMIC_DECLARE(uint16_t, ref);
     /* threads bind queue id one by one */
@@ -84,7 +83,6 @@ typedef struct DPDKIfaceConfig_ {
     SC_ATOMIC_DECLARE(uint16_t, inconsistent_numa_cnt);
     DPDKWorkerSync *workers_sync;
     void (*DerefFunc)(void *);
-    void (*RteRulesFree)(RteFlowRuleStorage *);
 
     struct rte_flow *flow[100];
 #endif

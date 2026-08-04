@@ -41,7 +41,6 @@ typedef struct DPDKIfaceConfigAttributes_ {
     const char *tx_descriptors;
     const char *copy_mode;
     const char *copy_iface;
-    const char *drop_filter;
     const char *capture_bypass;
 } DPDKIfaceConfigAttributes;
 
