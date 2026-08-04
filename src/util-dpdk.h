@@ -28,14 +28,19 @@
 #include "util-device.h"
 #include "util-dpdk-rte-flow-structs.h"
 
+#define RTE_DEFAULT_GROUP 0
+#define RTE_JUMP_GROUP    1
+#define RTE_FLOW_QUEUE_ID     0
+
+#define RTE_RULE_PRIORITY_0 0
+#define RTE_RULE_PRIORITY_1 1
+
 typedef struct {
     struct rte_mempool **pkt_mp;
     uint16_t pkt_mp_cnt;
     uint16_t pkt_mp_capa;
 #ifdef HAVE_DPDK
-    RteFlowRuleStorage *drop_filter;
     RteFlowBypassData *rte_flow_bypass_data;
-    RteFlowRSSTemplateResources *rss_template_resources;
 #endif /* HAVE_DPDK */
     uint16_t port_id;
 } DPDKDeviceResources;

@@ -36,7 +36,6 @@
 int iceDeviceSetRSS(int port_id, uint16_t nb_rx_queues, char *port_name);
 void iceDeviceSetRSSConf(struct rte_eth_rss_conf *rss_conf);
 bool iceDeviceRteFlowPatternError(struct rte_flow_item *items);
-bool iceDeviceDecideRteFlowActionType(RteFlowRuleStorage *rule_storage, const char *port_name);
 
 #endif /* HAVE_DPDK */
 

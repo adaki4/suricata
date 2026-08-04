@@ -37,16 +37,12 @@ extern uint8_t RSS_HKEY[];
 struct rte_flow_action_rss DPDKInitRSSAction(struct rte_eth_rss_conf rss_conf, int nb_rx_queues,
         uint16_t *queues, enum rte_eth_hash_function func, bool set_key);
 int DPDKCreateRSSFlowGeneric(
-        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf);
+        int port_id, const char *port_name, struct rte_flow_action_rss rss_conf, uint32_t group);
 int DPDKSetRSSFlowQueues(int port_id, const char *port_name, struct rte_flow_action_rss rss_conf);
 int DPDKCreateRSSFlow(int port_id, const char *port_name, struct rte_flow_action_rss rss_conf,
         uint64_t rss_type, struct rte_flow_item *pattern);
-
-/* Template API RSS function (DPDK 22.11+) */
-int DPDKCreateRSSFlowTemplate(int port_id, const char *port_name,
-        struct rte_flow_action_rss rss_conf, uint64_t rss_type,
-        struct rte_flow_item *pattern, int nb_pattern_items,
-        RteFlowRSSTemplateResources *rss_tmpl);
+int DPDKInitRSSTemplate(uint16_t port_id, RteFlowBypassData *bypass_data);
+int DPDKCreateRSSFlowAsync(uint16_t port_id, const char *port_name, struct rte_flow_action_rss rss_conf, uint32_t group, RteFlowBypassData *bypass_data);
 
 #endif /* HAVE_DPDK */
 
