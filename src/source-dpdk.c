@@ -461,6 +461,7 @@ static inline Packet *PacketInitFromMbuf(DPDKThreadVars *ptv, struct rte_mbuf *m
         p->BypassPacketsFlow = RteFlowBypassCallback;
     p->dpdk_v.copy_mode = ptv->copy_mode;
     p->dpdk_v.out_port_id = ptv->out_port_id;
+    p->dpdk_v.in_queue_id = ptv->queue_id;
     p->dpdk_v.out_queue_id = ptv->queue_id;
     p->livedev_id = ptv->livedev->id;
 
