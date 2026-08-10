@@ -71,7 +71,7 @@ typedef struct RteFlowBypassData_ {
     RteFlowTemplateResources *bypass_resources_ipv4;
     RteFlowTemplateResources *bypass_resources_ipv6;
     uint16_t port_id;
-
+    uint16_t nb_rx_queues;
 } RteFlowBypassData;
 
 /** \brief Holds RSS Template API resources for cleanup on device close */
