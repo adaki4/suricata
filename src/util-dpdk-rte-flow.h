@@ -47,6 +47,7 @@ int RteFlowBypassCallback(Packet *);
 bool RteBypassUpdate(Flow *flow, void *data, time_t tsec);
 void RteBypassFree(void *data);
 int RteFlowCreateJumpRule(uint16_t, const char *, RteFlowBypassData *rte_flow_bypass_data);
+void RteFlowWorkerDrain(uint16_t port_id, uint16_t queue_id, RteFlowBypassData *rte_flow_bypass_data);
 
 /* Template API resource management */
 struct rte_flow *RteFlowCreateRuleAsync(int port_id, uint32_t queue_id, struct rte_flow_template_table *table,

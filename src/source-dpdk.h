@@ -95,6 +95,7 @@ typedef struct DPDKIfaceConfig_ {
  */
 typedef struct DPDKPacketVars_ {
     struct rte_mbuf *mbuf;
+    uint16_t in_queue_id;
     uint16_t out_port_id;
     uint16_t out_queue_id;
     DpdkCopyModeEnum copy_mode;
