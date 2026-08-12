@@ -80,7 +80,9 @@ static int nfbDeviceSetRSS(int port_id, uint16_t nb_rx_queues, char *port_name, 
     return 0;
 }
 
-
+// int nfbDeviceRteFlowUpdateStats(FlowBypassInfo *fc, LiveDevice *livedev, RteFlowHandlerToFlow *flow_handler_info) {
+//     rte_flow_async_action_list_handle_query_update()
+// }
 #endif /* HAVE_DPDK */
 /**
  * @}
