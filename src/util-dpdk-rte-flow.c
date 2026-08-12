@@ -68,7 +68,6 @@
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-
 typedef struct RteFlowHandlerToFlow_ {
     Flow *flow;
     struct rte_flow *src_handle;
@@ -78,6 +77,10 @@ typedef struct RteFlowHandlerToFlow_ {
     RteFlowBypassData *rte_flow_bypass_data;
     uint16_t livedev_id;
     uint16_t in_queue_id;
+    void *query[2];
+	bool is_final;
+	struct rte_flow_query_count count_src;
+	struct rte_flow_query_count count_dst;
 } RteFlowHandlerToFlow;
 
 static uint32_t RteFlowBypassGetBypassInfoMPSize(const char *, uint32_t *);
@@ -238,7 +241,7 @@ int RteFlowTemplateResourcesInit(uint16_t port_id, RteFlowBypassData *data)
 
     pattern_template[L3_INDEX].type = RTE_FLOW_ITEM_TYPE_IPV4;
     pattern_template[L3_INDEX].spec = &ipv4_spec;
-    pattern_template[L3_INDEX].mask = &rte_flow_item_vlan;
+    pattern_template[L3_INDEX].mask = &ipv4_mask;
     pattern_template[L4_INDEX].type = RTE_FLOW_ITEM_TYPE_TCP;
     pattern_template[L4_INDEX].spec = &tcp_spec;
     pattern_template[L4_INDEX].mask = &tcp_mask;
@@ -668,12 +671,12 @@ static int RteFlowBypassAsyncInit(uint16_t port_id, const char *port_name, RteFl
         SCReturnInt(retval);
 
     /* Prepare the jump rule */
-    // retval = RteFlowJumpRuleTemplateInit(port_id, rte_flow_bypass_data);
-    // if (retval != 0) {
-    //     RteFlowTemplateResourcesFree(port_id, rte_flow_bypass_data->bypass_resources_ipv4);
-    //     RteFlowTemplateResourcesFree(port_id, rte_flow_bypass_data->bypass_resources_ipv6);
-    //     SCReturnInt(retval);
-    // }
+    retval = RteFlowJumpRuleTemplateInit(port_id, rte_flow_bypass_data);
+    if (retval != 0) {
+        RteFlowTemplateResourcesFree(port_id, rte_flow_bypass_data->bypass_resources_ipv4);
+        RteFlowTemplateResourcesFree(port_id, rte_flow_bypass_data->bypass_resources_ipv6);
+        SCReturnInt(retval);
+    }
     SCReturnInt(0);
 }
 
@@ -775,6 +778,41 @@ int RteFlowCheckRules(ThreadVars *th_v, struct flows_stats *bypassstats, struct 
     SCReturnInt(0);
 }
 
+int nfbDeviceRteFlowUpdateStats(FlowBypassInfo *fc, LiveDevice *livedev, RteFlowHandlerToFlow *flow_handler_info) {
+    struct rte_flow_op_attr op_attr = { .postpone = 1 };
+    struct rte_flow_error error = { 0 };
+    uint16_t port_id = livedev->dpdk_vars->port_id;
+    uint16_t pull_size = 16;
+	struct rte_flow_op_result results[pull_size];
+
+    int retval = rte_flow_async_action_list_handle_query_update(port_id, rte_flow_manager_queue_id, &op_attr, flow_handler_info->src_action_handle, NULL, flow_handler_info->query, RTE_FLOW_QU_QUERY_FIRST, flow_handler_info, &error);
+    if (retval < 0) {
+        SCLogWarning("nfb rte_flow_async_action_list_handle_query_update() error");
+        SCReturnInt(0);
+    }
+
+    int pulled = 0;
+    while (pulled == 0) {
+        pulled = rte_flow_pull(port_id, rte_flow_manager_queue_id, results, pull_size, &error);
+        if (pulled < 0) {
+            SCLogWarning("nfb error pull");
+        }
+        struct flow_handler_info *curr_res = results[0].user_data;
+        if (results[0].status != RTE_FLOW_OP_SUCCESS) {
+            SCLogWarning("Query op not success");
+        }
+        if (flow_handler_info->count_src.hits || flow_handler_info->count_dst.hits) {
+            fc->tosrcpktcnt = flow_handler_info->count_src.hits;
+            fc->tosrcbytecnt = flow_handler_info->count_src.bytes;
+            fc->todstpktcnt = flow_handler_info->count_dst.hits;
+            fc->todstbytecnt = flow_handler_info->count_src.hits;;
+            SCReturnInt(1);
+        }
+    }
+
+    SCReturnInt(0);
+}
+
 /**
  * \brief Decides whether the rte_flow rule should be removed from the table
  *
@@ -787,7 +825,7 @@ int RteFlowCheckRules(ThreadVars *th_v, struct flows_stats *bypassstats, struct 
 static int RteFlowUpdateStats(FlowBypassInfo *fc, LiveDevice *livedev, RteFlowHandlerToFlow *flow_handler_info)
 {
     struct rte_flow_op_attr op_attr = { .postpone = 1 };
-    struct rte_flow_query_count query_count = {0};
+    struct rte_flow_query_count query_count = { 0 };
     struct rte_flow_error error;
     uint64_t src_packets = 0, src_bytes = 0, dst_packets = 0, dst_bytes = 0;
     uint16_t port_id = livedev->dpdk_vars->port_id;
@@ -806,7 +844,7 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, LiveDevice *livedev, RteFlowHa
     memset(&query_count, 0, sizeof(struct rte_flow_query_count));
     query_count.reset = 1;
 
-    retval = c(port_id, rte_flow_manager_queue_id, &op_attr,
+    retval = rte_flow_async_action_handle_query(port_id, rte_flow_manager_queue_id, &op_attr,
 										 flow_handler_info->dst_action_handle, &query_count, flow_handler_info, &error);
     if (retval != 0)  {
         SCLogWarning("rte_flow_async_action_handle_query() failed: %d with: %s\n", retval, error.message);
@@ -815,10 +853,7 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, LiveDevice *livedev, RteFlowHa
         dst_packets += query_count.hits;
         dst_bytes += query_count.bytes;
     }
-    
-    /* The flow manager thread is the sole producer/consumer of the manager
-     * queue, so pushing a batch and pulling its completions here is safe.
-     */
+
     retval = rte_flow_push(port_id, rte_flow_manager_queue_id, &error);
     if (retval != 0) {
         SCLogWarning("UpdateStats rte_flow_push() failed: %s", error.message);
