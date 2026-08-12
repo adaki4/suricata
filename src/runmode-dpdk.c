@@ -369,10 +369,13 @@ static void ConfigSetIface(DPDKIfaceConfig *iconf, const char *entry_str)
 
     if (entry_str == NULL || entry_str[0] == '\0')
         FatalError("Interface name in DPDK config is NULL or empty");
-
-    retval = rte_eth_dev_get_port_by_name(entry_str, &iconf->port_id);
+    char name[RTE_ETH_NAME_MAX_LEN];
+    rte_eth_dev_get_name_by_port(0, name);
+    SCLogInfo("name: %s", name);
+    const char* new_entry_str = "0000:21:00.0_eth0";
+    retval = rte_eth_dev_get_port_by_name(new_entry_str, &iconf->port_id);
     if (retval < 0)
-        FatalError("%s: interface not found: %s", entry_str, rte_strerror(-retval));
+        FatalError("%s: interface not found: %s", new_entry_str, rte_strerror(-retval));
 
     strlcpy(iconf->iface, entry_str, sizeof(iconf->iface));
     SCReturn;
@@ -1691,7 +1694,8 @@ static int DeviceConfigureDynamicBypass(
         SCReturnInt(retval);
     }
     const char *driver_name = dev_info->driver_name;
-    if (strcmp(driver_name, "mlx5_pci") == 0) {
+    SCLogInfo("driver_name: %s", driver_name);
+    if ((strcmp(driver_name, "mlx5_pci") == 0) || (strcmp(driver_name, "net_nfb") == 0)) {
         retval = RteBypassInit(iconf, driver_name);
         if (retval < 0) {
             SCLogError("%s: rte bypass init failed", iconf->iface);

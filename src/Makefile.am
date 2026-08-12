@@ -481,6 +481,7 @@ noinst_HEADERS = \
 	util-dpdk-ice.h \
 	util-dpdk-ixgbe.h \
 	util-dpdk-mlx5.h \
+	util-dpdk-nfb.h \
 	util-dpdk-rss.h \
 	util-dpdk.h \
 	util-dpdk-rte-flow.h \
@@ -1043,6 +1044,7 @@ libsuricata_c_a_SOURCES = \
 	util-dpdk-ice.c \
 	util-dpdk-ixgbe.c \
 	util-dpdk-mlx5.c \
+	util-dpdk-nfb.c \
 	util-dpdk-rss.c \
 	util-dpdk.c \
 	util-dpdk-rte-flow.c \
