@@ -94,6 +94,7 @@ TmEcode NoDPDKSupportExit(ThreadVars *tv, const void *initdata, void **data)
 #include "util-dpdk-ice.h"
 #include "util-dpdk-ixgbe.h"
 #include "util-dpdk-mlx5.h"
+#include "util-dpdk-nfb.h"
 #include "util-dpdk-bonding.h"
 #include <numa.h>
 
@@ -218,6 +219,8 @@ static int DevicePostStartPMDSpecificActions(
     else if (strcmp(driver_name, "mlx5_pci") == 0) {
         RteFlowBypassData *bypass_data = ptv->livedev->dpdk_vars->rte_flow_bypass_data;
         retval = mlx5DevicePostStartActions(ptv->port_id, ptv->threads, ptv->livedev->dev, dpdk_config->capture_bypass_enabled, bypass_data);
+    } else if (strcmp(driver_name, "net_nfb") == 0) {
+        // retval = nfbDevicePostStartActions(ptv->port_id, ptv->threads, ptv->livedev->dev, dpdk_config->capture_bypass_enabled, ptv->livedev->dpdk_vars->rte_flow_bypass_data);
     }
 
     SCReturnInt(retval);

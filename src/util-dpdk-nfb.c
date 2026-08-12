@@ -1,0 +1,87 @@
+/* Copyright (C) 2026 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ *  \defgroup dpdk DPDK NVIDIA nfb driver helpers functions
+ *
+ *  @{
+ */
+
+/**
+ * \file
+ *
+ * \author Adam Kiripolsky <adam.kiripolsky@cesnet.cz>
+ *
+ * DPDK driver's helper functions
+ *
+ */
+
+#include "util-debug.h"
+#include "util-dpdk.h"
+#include "util-dpdk-bonding.h"
+#include "util-dpdk-nfb.h"
+#include "util-dpdk-rss.h"
+#include "util-dpdk-rte-flow.h"
+
+#ifdef HAVE_DPDK
+
+#define NFB_RSS_HKEY_LEN 40
+
+static int nfbDeviceSetRSS(int, uint16_t, char *, uint16_t, RteFlowBypassData *);
+
+int nfbDevicePostStartActions(
+        int port_id, uint16_t nb_rx_queues, char *port_name, bool capture_bypass_enabled, RteFlowBypassData *rte_flow_bypass_data)
+{
+    int retval = 0;
+    retval = nfbDeviceSetRSS(port_id, nb_rx_queues, port_name, RTE_DEFAULT_GROUP, rte_flow_bypass_data);
+    return retval;
+}
+
+static int nfbDeviceSetRSS(int port_id, uint16_t nb_rx_queues, char *port_name, uint16_t group, RteFlowBypassData *rte_flow_bypass_data)
+{
+    uint16_t queues[RTE_MAX_QUEUES_PER_PORT];
+    struct rte_flow_error flush_error = { 0 };
+    struct rte_eth_rss_conf rss_conf = {
+        .rss_key = RSS_HKEY,
+        .rss_key_len = NFB_RSS_HKEY_LEN,
+    };
+
+    if (nb_rx_queues < 1) {
+        FatalError("The number of queues for RSS configuration must be "
+                   "configured with a positive number");
+    }
+
+    struct rte_flow_action_rss rss_action_conf =
+            DPDKInitRSSAction(rss_conf, nb_rx_queues, queues, RTE_ETH_HASH_FUNCTION_TOEPLITZ, true);
+    int retval = DPDKCreateRSSFlowAsync(port_id, port_name, rss_action_conf, group, rte_flow_bypass_data);
+    if (retval != 0) {
+        retval = rte_flow_flush(port_id, &flush_error);
+        if (retval != 0) {
+            SCLogError("%s: unable to flush rte_flow rules: %s Flush error msg: %s", port_name,
+                    rte_strerror(-retval), flush_error.message);
+        }
+        return retval;
+    }
+
+    return 0;
+}
+
+
+#endif /* HAVE_DPDK */
+/**
+ * @}
+ */
