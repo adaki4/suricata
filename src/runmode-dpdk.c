@@ -46,6 +46,8 @@
 #include "util-dpdk-i40e.h"
 #include "util-dpdk-ice.h"
 #include "util-dpdk-ixgbe.h"
+#include "util-dpdk-mlx5.h"
+#include "util-dpdk-nfb.h"
 #include "util-dpdk-rss.h"
 #include "util-dpdk-rte-flow.h"
 #include "util-time.h"
@@ -1175,6 +1177,8 @@ static void DeviceSetPMDSpecificRSS(struct rte_eth_rss_conf *rss_conf, const cha
         ixgbeDeviceSetRSSHashFunction(&rss_conf->rss_hf);
     if (strcmp(driver_name, "net_e1000_igb") == 0)
         rss_conf->rss_hf = (RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_IPV6 | RTE_ETH_RSS_IPV6_EX);
+    if (strcmp(driver_name, "net_nfb") == 0)
+        nfbDeviceSetRSSConf(rss_conf);
 }
 
 // Returns -1 if no bit is set
@@ -1689,26 +1693,18 @@ static int DeviceConfigureDynamicBypass(
         DPDKIfaceConfig *iconf, const struct rte_eth_dev_info *dev_info)
 {
     SCEnter();
-    int retval = 0;
     if (!(iconf->capture_bypass_enabled)) {
-        SCReturnInt(retval);
+        SCReturnInt(0);
     }
-    const char *driver_name = dev_info->driver_name;
-    SCLogInfo("driver_name: %s", driver_name);
-    if ((strcmp(driver_name, "mlx5_pci") == 0) || (strcmp(driver_name, "net_nfb") == 0)) {
-        retval = RteBypassInit(iconf, driver_name);
-        if (retval < 0) {
-            SCLogError("%s: rte bypass init failed", iconf->iface);
-            SCReturnInt(retval);
-        }
-        retval = DPDKInitRSSTemplate(iconf->port_id, iconf->dpdk_dev_resources->rte_flow_bypass_data);
-        if (retval < 0) {
-            SCLogError("%s: rte_flow rss async init failed", iconf->iface);
-            SCReturnInt(retval);
-        }
+    int retval = 0;
+    if ((strcmp(dev_info->driver_name, "mlx5_pci") == 0) || (strcmp(dev_info->driver_name, "net_nfb") == 0))
+        retval = RteBypassInit(iconf, dev_info->driver_name);
+
+    if (retval == 0) {
+        SCLogConfig("%s: rte_flow capture bypass enabled", iconf->iface);
+    } else {
+        SCLogConfig("%s: rte_flow capture bypass init not successful",  iconf->iface);
     }
-    if (retval == 0)
-        SCLogConfig("%s rte_flow capture bypass enabled", iconf->iface);
     SCReturnInt(retval);
 }
 /**

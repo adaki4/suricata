@@ -29,9 +29,16 @@
 
 #ifdef HAVE_DPDK
 
+typedef struct DPDKIfaceConfig_ DPDKIfaceConfig;
+
 #define MLX5_RTE_FLOW_RULES_CAPACITY 4194304
 
+int mlx5DeviceRteFlowTemplatesInit(uint16_t port_id, uint16_t queues_nb, const char *port_name, RteFlowBypassData *rte_flow_bypass_data) ;
 int mlx5DevicePostStartActions(int port_id, uint16_t nb_rx_queues, char *port_name, bool capture_bypass_enabled, RteFlowBypassData *rte_flow_bypass_data);
+int mlx5DeviceRteFlowUpdateStats(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
+struct rte_flow_action_list_handle *mlx5DeviceRteFlowCreateIndirectAction(uint16_t port_id, uint32_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
+void mlx5DeviceRteFlowRuleDestroy(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
+int mlx5DeviceRteFlowBypassCallback(Packet *p);
 
 #endif /* HAVE_DPDK */
 

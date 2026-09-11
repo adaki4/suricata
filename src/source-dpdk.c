@@ -587,6 +587,7 @@ static void HandleShutdown(DPDKThreadVars *ptv)
                 while (SC_ATOMIC_GET(ptv->livedev->dpdk_vars->rte_flow_bypass_data
                                              ->rte_bypass_rules_active) != 0) {
                     rte_delay_us(10000);
+                    // SCLogInfo("Active: %d", SC_ATOMIC_GET(ptv->livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_active));
                 }
             }
         }
