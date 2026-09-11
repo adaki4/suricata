@@ -247,7 +247,7 @@ int DPDKInitRSSTemplate(uint16_t port_id, RteFlowBypassData *bypass_data)
 
 cleanup:
     SCLogError("rte_flow bypass: rss rule template failed");
-    RteFlowTemplateResourcesFree(port_id, bypass_data->rss_resources);
+    RteFlowBypasTemplateResourcesFree(port_id, bypass_data->rss_resources);
     bypass_data->rss_resources = NULL;
     SCReturnInt(-1);
 }

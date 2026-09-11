@@ -47,19 +47,21 @@ int RteFlowBypassCallback(Packet *);
 bool RteBypassUpdate(Flow *flow, void *data, time_t tsec);
 void RteBypassFree(void *data);
 int RteFlowCreateJumpRule(uint16_t, const char *, RteFlowBypassData *rte_flow_bypass_data);
-void RteFlowWorkerDrain(uint16_t port_id, uint16_t queue_id, RteFlowBypassData *rte_flow_bypass_data);
-
+void RteFlowSetFlowBypassInfo(FlowBypassInfo *fc,
+        Flow *flow, struct rte_flow *src_handler, struct rte_flow *dst_handler, struct rte_flow_action_list_handle *src_action_list_handle, struct rte_flow_action_list_handle *dst_action_list_handle, int family);
 /* Template API resource management */
 struct rte_flow *RteFlowCreateRuleAsync(int port_id, uint32_t queue_id, struct rte_flow_template_table *table,
 				  struct rte_flow_item *pattern, uint8_t pt_index, struct rte_flow_action *actions, uint8_t at_index, void *user_data);
-int RteFlowTemplateResourcesInit(uint16_t port_id, RteFlowBypassData *data);
-void RteFlowTemplateResourcesFree(uint16_t port_id, RteFlowTemplateResources *template_resources);
+int RteFlowBypassTemplateResourcesInit(uint16_t port_id, RteFlowBypassData *data);
+void RteFlowBypasTemplateResourcesFree(uint16_t port_id, RteFlowTemplateResources *template_resources);
+enum RteTemplatePatterns RteGetTemplatePatternIndex(bool has_vlan, bool is_tcp);
 
 /* Template creation helpers */
+int RteFlowJumpRuleTemplateInit(uint16_t port_id, RteFlowBypassData *rte_flow_bypass_data);
 void RteFlowActionHandleDestroyFlow(RteFlowBypassData *rte_flow_bypass_data,
         uint16_t port_id, struct rte_flow_action_handle *action_handle);
 struct rte_flow_pattern_template *
-RteFlowCreatePatternTemplate(int, struct rte_flow_item *);
+RteFlowCreatePatternTemplate(int, const struct rte_flow_item *);
 struct rte_flow_actions_template *
 RteFlowCreateActionTemplate(int, struct rte_flow_action *,
         struct rte_flow_action *);

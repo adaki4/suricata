@@ -85,7 +85,8 @@ void DPDKCloseDevice(LiveDevice *ldev)
 #ifdef HAVE_DPDK
     if (SCRunmodeGet() == RUNMODE_DPDK) {
         uint16_t port_id;
-        int retval = rte_eth_dev_get_port_by_name(ldev->dev, &port_id);
+        const char* new_entry_str = "0000:21:00.0_eth0";
+        int retval = rte_eth_dev_get_port_by_name(new_entry_str, &port_id);
         if (retval < 0) {
             SCLogError("%s: failed get port id, error: %s", ldev->dev, rte_strerror(-retval));
             return;

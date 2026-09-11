@@ -29,9 +29,17 @@
 
 #ifdef HAVE_DPDK
 
+typedef struct DPDKIfaceConfig_ DPDKIfaceConfig;
+typedef struct LiveDevice_ LiveDevice;
+
 #define NFB_RTE_FLOW_RULES_CAPACITY 4194304
 
+void nfbDeviceSetRSSConf(struct rte_eth_rss_conf *rss_conf);
 int nfbDevicePostStartActions(int port_id, uint16_t nb_rx_queues, char *port_name, bool capture_bypass_enabled, RteFlowBypassData *rte_flow_bypass_data);
+int nfbDeviceRteFlowTemplatesInit(uint16_t port_id, uint16_t queues_nb, const char *port_name, RteFlowBypassData *rte_flow_bypass_data);
+int nfbDeviceRteFlowUpdateStats(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
+int nfbDeviceRteFlowBypassCallback(Packet *p);
+void nfbDeviceRteFlowRuleDestroy(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
 
 #endif /* HAVE_DPDK */
 

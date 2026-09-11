@@ -31,6 +31,7 @@
  */
 
 #include "util-debug.h"
+#include "decode.h"
 #include "util-dpdk.h"
 #include "util-dpdk-bonding.h"
 #include "util-dpdk-mlx5.h"
@@ -90,6 +91,119 @@ static int mlx5DeviceSetRSS(int port_id, uint16_t nb_rx_queues, char *port_name,
 
     return 0;
 }
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+
+int mlx5DeviceRteFlowTemplatesInit(uint16_t port_id, uint16_t queues_nb, const char *port_name, RteFlowBypassData *rte_flow_bypass_data) 
+{
+    SCEnter();
+    struct rte_flow_port_attr port_attr = { 0 };
+    struct rte_flow_queue_attr queue_attr = {
+        .size = queues_nb,
+    };
+
+    /* Create as many queues as there are workers and additional 1 for flow manager and 1 for bypass manager */
+    const struct rte_flow_queue_attr *queue_attrs[queues_nb];
+    for (uint16_t i = 0; i < queues_nb; i++) {
+        queue_attrs[i] = &queue_attr;
+    }
+
+    struct rte_flow_error flow_error = { 0 };
+    int retval = rte_flow_configure(
+        port_id, &port_attr, queues_nb, queue_attrs, &flow_error);
+    if (retval < 0) { 
+        SCLogError("%s: rte_flow_configure failed: %s", port_name, flow_error.message);
+        SCReturnInt(retval);
+    }
+
+    /* Prepare template resources */
+    retval = RteFlowBypassTemplateResourcesInit(port_id, rte_flow_bypass_data);
+    if (retval != 0)
+        SCReturnInt(retval);
+    retval = RteFlowJumpRuleTemplateInit(port_id, rte_flow_bypass_data);
+    if (retval != 0)
+        SCReturnInt(retval);
+    retval = DPDKInitRSSTemplate(port_id, rte_flow_bypass_data);
+    if (retval < 0) {
+        SCReturnInt(retval);
+    }
+    SCReturnInt(0);
+}
+
+int mlx5DeviceRteFlowUpdateStats(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info)
+{
+    struct rte_flow_op_attr op_attr = { .postpone = 1 };
+    struct rte_flow_query_count query_count = { 0 };
+    struct rte_flow_error error;
+    uint64_t src_packets = 0, src_bytes = 0, dst_packets = 0, dst_bytes = 0;
+    RteFlowBypassData *bypass_data = flow_handler_info->rte_flow_bypass_data;
+    uint16_t port_id = bypass_data->port_id;
+
+    query_count.reset = 1;
+	int retval = rte_flow_async_action_handle_query(port_id, queue_id, &op_attr,
+										 flow_handler_info->src_action_handle, &query_count, flow_handler_info, &error);
+	if (retval != 0) {
+		SCLogWarning("rte_flow_async_action_handle_query() failed: %d with: %s\n", retval, error.message);
+        SC_ATOMIC_ADD(bypass_data->rte_bypass_query_error, 1);
+    } else {
+        src_packets += query_count.hits;
+        src_bytes += query_count.bytes;
+    }
+
+    memset(&query_count, 0, sizeof(struct rte_flow_query_count));
+    query_count.reset = 1;
+
+    retval = rte_flow_async_action_handle_query(port_id, queue_id, &op_attr,
+										 flow_handler_info->dst_action_handle, &query_count, flow_handler_info, &error);
+    if (retval != 0)  {
+        SCLogWarning("rte_flow_async_action_handle_query() failed: %d with: %s\n", retval, error.message);
+        SC_ATOMIC_ADD(bypass_data->rte_bypass_query_error, 1);
+    } else {
+        dst_packets += query_count.hits;
+        dst_bytes += query_count.bytes;
+    }
+
+    retval = rte_flow_push(port_id, queue_id, &error);
+    if (retval != 0) {
+        SCLogWarning("UpdateStats rte_flow_push() failed: %s", error.message);
+    }
+
+    int max_res_size = 1024;
+    struct rte_flow_op_result res[max_res_size];
+    retval = rte_flow_pull(port_id, queue_id, res, max_res_size, &error);
+    if (retval < 0) {
+        SCLogWarning("UpdateStats rte_flow_pull() failed: %s", error.message);
+    } else {
+        for (int i = 0; i < retval; i++) {
+            if (res[i].status != 0 && res[i].user_data != NULL) {
+                SCLogWarning("UpdateStats rte_flow_pull Not OK: status=%d user_data=%p", res[i].status, res[i].user_data);
+            }
+        }
+    }
+
+    return 0;
+}
+
+struct rte_flow_action_list_handle *mlx5DeviceRteFlowCreateIndirectAction(uint16_t port_id, uint32_t queue_id, RteFlowHandlerToFlow *flow_handler_info)
+{
+    // TODO
+    return NULL;
+}
+
+void mlx5DeviceRteFlowRuleDestroy(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info)
+{
+    // TODO copy from other branch
+}
+
+int mlx5DeviceRteFlowBypassCallback(Packet *p)
+{
+    // TODO copy from other branch
+    SCReturnInt(1);
+}
+
+
+#pragma GCC diagnostic pop
 
 #endif /* HAVE_DPDK */
 /**
