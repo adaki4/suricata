@@ -1446,7 +1446,8 @@
             echo
             exit 1
         fi
-        CFLAGS="${CFLAGS} `pkg-config --cflags libdpdk`"
+        DPDK_RAW_CFLAGS="$(pkg-config --cflags libdpdk)"
+        CFLAGS="${CFLAGS} $(echo "${DPDK_RAW_CFLAGS}" | sed 's/-I/-isystem /g')"
         LIBS="${LIBS} -lnuma `pkg-config --libs libdpdk`"
 
         if test ! -z "$(ldconfig -p | grep librte_net_bond)"; then
