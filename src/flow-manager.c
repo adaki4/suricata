@@ -149,7 +149,7 @@ void FlowDisableFlowManagerThread(void)
 
 again:
     gettimeofday(&cur_ts, NULL);
-    if ((cur_ts.tv_sec - start_ts.tv_sec) > 60) {
+    if ((cur_ts.tv_sec - start_ts.tv_sec) > 120) {
         FatalError("unable to get all flow manager "
                    "threads to shutdown in time");
     }

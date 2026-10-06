@@ -40,6 +40,7 @@ int nfbDeviceRteFlowTemplatesInit(uint16_t port_id, uint16_t queues_nb, const ch
 int nfbDeviceRteFlowUpdateStats(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
 int nfbDeviceRteFlowBypassCallback(Packet *p);
 void nfbDeviceRteFlowRuleDestroy(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
+bool nfbDeviceRteFlowHandleUpdate(bool activity, RteFlowHandlerToFlow *flow_handler_info, RteFlowBypassData *bypass_data);
 
 #endif /* HAVE_DPDK */
 

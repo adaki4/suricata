@@ -115,6 +115,7 @@ typedef struct RteFlowBypassData_ {
     void (*RteFlowDeviceDestroyRule)(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
     int (*RteFlowDeviceTemplatesInit)(uint16_t port_id, uint16_t queues_nb, const char *port_name, RteFlowBypassData *rte_flow_bypass_data);
     int (*RteFlowDeviceCreateIndirectAction)(uint16_t port_id, RteFlowHandlerToFlow *flow_handler_info);
+    bool (*RteFlowDeviceHandleUpdate)(bool activity, RteFlowHandlerToFlow *flow_handler_info, RteFlowBypassData *bypass_data);
     uint16_t rte_flow_manager_queue_base;
     uint32_t nb_flow_manager_queues;
     // TODO change value

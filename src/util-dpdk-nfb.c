@@ -39,6 +39,7 @@
 #include "util-dpdk-rss.h"
 #include "util-dpdk-rte-flow.h"
 #include "util-dpdk-rss.h"
+#include "suricata.h"
 
 #include "tm-threads.h"
 
@@ -214,6 +215,25 @@ void nfbDeviceRteFlowRuleDestroy(uint16_t queue_id, RteFlowHandlerToFlow *flow_h
 
 }
 
+bool nfbDeviceRteFlowHandleUpdate(bool activity, RteFlowHandlerToFlow *flow_handler_info, RteFlowBypassData *bypass_data)
+{
+    if (unlikely(suricata_ctl_flags != 0)) {
+        flow_handler_info->src_handle = NULL;
+        SC_ATOMIC_SUB(bypass_data->rte_bypass_rules_active, 1);
+        return activity;
+    }
+
+    if (!activity) {
+        if (flow_handler_info->src_handle != NULL) {
+            nfbDeviceRteFlowRuleDestroy(flow_handler_info->in_queue_id, flow_handler_info);
+            flow_handler_info->src_handle = NULL;
+            SC_ATOMIC_SUB(bypass_data->rte_bypass_rules_active, 1);
+        }
+    }
+    return activity;
+}
+
+
 /** \brief Create hardware (rte_flow) rule for the incomign flow.  
  * 
  * \param p packet for which we create the bypass
@@ -334,7 +354,11 @@ int nfbDeviceRteFlowBypassCallback(Packet *p)
     items[L4_INDEX].mask = l4_mask;
 	
     struct rte_flow_action_list_handle *action_list_handle = nfbDeviceRteFlowCreateIndirectAction(port_id, flow_handler_info);
-	struct rte_flow_action_indirect_list indir_list = {
+    if (action_list_handle == NULL) {
+        SC_ATOMIC_ADD(bypass_data->rte_bypass_rules_error, 1);
+        SCReturnInt(0);
+    }
+    struct rte_flow_action_indirect_list indir_list = {
 		.handle = action_list_handle,
 		.conf = NULL,
 	};
@@ -343,7 +367,7 @@ int nfbDeviceRteFlowBypassCallback(Packet *p)
     
     if (rule_handle == NULL) {
             nfbDeviceRteFlowRuleDestroy(rule_queue_id, flow_handler_info);
-            SC_ATOMIC_ADD(bypass_data->rte_bypass_flows_bypass_error, 1);
+            SC_ATOMIC_ADD(bypass_data->rte_bypass_rules_error, 1);
             SCReturnInt(0);
     }
 
@@ -357,9 +381,9 @@ int nfbDeviceRteFlowBypassCallback(Packet *p)
     RteFlowSetFlowBypassInfo(fc, flow, rule_handle, NULL, action_list_handle, NULL, inet_family);
     flow_handler_info->in_queue_id = p->dpdk_v.in_queue_id;
 
-    SC_ATOMIC_ADD(bypass_data->rte_bypass_rules_active, 2);
-    SC_ATOMIC_ADD(bypass_data->rte_bypass_rules_created, 2);
-    SC_ATOMIC_ADD(bypass_data->rte_bypass_rules_unchecked, 2);
+    SC_ATOMIC_ADD(bypass_data->rte_bypass_rules_active, 1);
+    SC_ATOMIC_ADD(bypass_data->rte_bypass_rules_created, 1);
+    SC_ATOMIC_ADD(bypass_data->rte_bypass_rules_unchecked, 1);
     SC_ATOMIC_ADD(bypass_data->rte_bypass_flows_bypass_success, 1);
 
     SCReturnInt(1);

@@ -474,9 +474,11 @@ RteFlowCreateRuleAsync(int port_id, uint32_t queue_id, struct rte_flow_template_
 		port_id, queue_id, &op_attr, table,
 		pattern, pt_index, actions, at_index, user_data, &error);
 
-	if (!flow)
+    if (!flow) {
 		SCLogError("rte_flow_async_create() failed: %s\n", error.message);
-
+        // SCLogInfo("rte_flow_async_create: src %s:%u dst %s:%u",
+        //         src_buf, src_port, dst_buf, dst_port);
+    }
 	return flow;
 }
 
@@ -592,6 +594,8 @@ static void RteFlowBypassRegisterCallbacks(const char *driver_name, RteFlowBypas
         bypass_data->RteFlowDeviceBypassUpdateStats = mlx5DeviceRteFlowUpdateStats;
         bypass_data->RteFlowDeviceDestroyRule = mlx5DeviceRteFlowRuleDestroy;
         bypass_data->RteFlowDeviceTemplatesInit = mlx5DeviceRteFlowTemplatesInit;
+        bypass_data->RteFlowDeviceHandleUpdate = mlx5DeviceRteFlowHandleUpdate;
+
     }
 
     if (strcmp(driver_name, "net_nfb") == 0) {
@@ -599,6 +603,7 @@ static void RteFlowBypassRegisterCallbacks(const char *driver_name, RteFlowBypas
         bypass_data->RteFlowDeviceBypassUpdateStats = nfbDeviceRteFlowUpdateStats;
         bypass_data->RteFlowDeviceDestroyRule = nfbDeviceRteFlowRuleDestroy;
         bypass_data->RteFlowDeviceTemplatesInit = nfbDeviceRteFlowTemplatesInit;
+        bypass_data->RteFlowDeviceHandleUpdate = nfbDeviceRteFlowHandleUpdate;
     }
 }
 
@@ -618,7 +623,7 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
     LiveDevice *livedev = LiveGetDevice(port_name);
     LiveDevUseBypass(livedev);
     int retval = 0;
-
+    remove("/tmp/rte_flow_rules.txt");
     /* If the bypass data is already allocated,
        the bypass is ready and we need only to decrease the rte_flow rules capacity
        by number of drop-filter rules present on this interface */
@@ -781,11 +786,11 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, RteFlowHandlerToFlow *flow_han
 // }
 
 /**
- * \brief Destroy rte_flow rules for both directions of a flow
+ * \brief Destroy rte_flow rule / rules associated with a flow
  *
- * \param port_id identifier of a port
- * \param src_handler handler of rte_flow rule
- * \param dst_handler handler of rte_flow rule
+ *
+ * \param queue_id identifier of a HW queue where the will be destroyed
+ * \param flow_handler_info pointer to the flow handler information containing the rule handles
  */
 static void RteFlowRuleDestroy(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info)
 {

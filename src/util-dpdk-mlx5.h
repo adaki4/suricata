@@ -35,10 +35,12 @@ typedef struct DPDKIfaceConfig_ DPDKIfaceConfig;
 
 int mlx5DeviceRteFlowTemplatesInit(uint16_t port_id, uint16_t queues_nb, const char *port_name, RteFlowBypassData *rte_flow_bypass_data) ;
 int mlx5DevicePostStartActions(int port_id, uint16_t nb_rx_queues, char *port_name, bool capture_bypass_enabled, RteFlowBypassData *rte_flow_bypass_data);
+int mlx5DeviceRteFlowTemplatesInit(uint16_t port_id, uint16_t queues_nb, const char *port_name, RteFlowBypassData *rte_flow_bypass_data) ;
 int mlx5DeviceRteFlowUpdateStats(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
-struct rte_flow_action_list_handle *mlx5DeviceRteFlowCreateIndirectAction(uint16_t port_id, uint32_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
-void mlx5DeviceRteFlowRuleDestroy(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
 int mlx5DeviceRteFlowBypassCallback(Packet *p);
+void mlx5DeviceRteFlowRuleDestroy(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
+bool mlx5DeviceRteFlowHandleUpdate(bool activity, RteFlowHandlerToFlow *flow_handler_info, RteFlowBypassData *bypass_data);
+struct rte_flow_action_list_handle *mlx5DeviceRteFlowCreateIndirectAction(uint16_t port_id, uint32_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
 
 #endif /* HAVE_DPDK */
 

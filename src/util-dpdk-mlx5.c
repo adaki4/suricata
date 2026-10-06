@@ -37,6 +37,7 @@
 #include "util-dpdk-mlx5.h"
 #include "util-dpdk-rss.h"
 #include "util-dpdk-rte-flow.h"
+#include "suricata.h"
 
 #ifdef HAVE_DPDK
 
@@ -194,6 +195,26 @@ struct rte_flow_action_list_handle *mlx5DeviceRteFlowCreateIndirectAction(uint16
 void mlx5DeviceRteFlowRuleDestroy(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info)
 {
     // TODO copy from other branch
+}
+
+bool mlx5DeviceRteFlowHandleUpdate(bool activity, RteFlowHandlerToFlow *flow_handler_info, RteFlowBypassData *bypass_data)
+{
+    if (unlikely(suricata_ctl_flags != 0)) {
+        flow_handler_info->src_handle = NULL;
+        flow_handler_info->dst_handle = NULL;
+        SC_ATOMIC_SUB(bypass_data->rte_bypass_rules_active, 2);
+        return activity;
+    }
+
+    if (!activity) {
+        if (flow_handler_info->src_handle != NULL && flow_handler_info->src_handle != NULL) {
+            mlx5DeviceRteFlowRuleDestroy(flow_handler_info->in_queue_id, flow_handler_info);
+            flow_handler_info->src_handle = NULL;
+            flow_handler_info->dst_handle = NULL;
+            SC_ATOMIC_SUB(bypass_data->rte_bypass_rules_active, 2);
+        }
+    }
+    return activity;
 }
 
 int mlx5DeviceRteFlowBypassCallback(Packet *p)
