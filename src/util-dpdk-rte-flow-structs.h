@@ -58,6 +58,7 @@ typedef struct RteFlowBypassData_ {
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_created);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_active);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_query_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_ring_enqueue_success);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_ring_enqueue_error_ring_full);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_ring_dequeue_success);
@@ -66,10 +67,9 @@ typedef struct RteFlowBypassData_ {
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_ring_ops);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flows_bypass_success);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flows_bypass_error);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flow_lookup_error);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flows_lookup_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_mempool_key_get_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_mempool_info_get_error);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_query_error);
 } RteFlowBypassData;
 
 #endif /* HAVE_DPDK */

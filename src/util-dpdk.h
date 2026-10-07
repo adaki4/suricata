@@ -31,6 +31,9 @@
 #define RTE_DEFAULT_GROUP 0
 #define RTE_JUMP_GROUP    1
 
+#define RTE_DEFAULT_PRIORITY 0
+#define RTE_LOW_PRIORITY_1   1
+
 typedef struct {
     struct rte_mempool **pkt_mp;
     uint16_t pkt_mp_cnt;

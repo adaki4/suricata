@@ -59,11 +59,11 @@
 #define RTE_BYPASS_RING_SIZE_DEFAULT               16384
 #define RTE_BYPASS_RING_DEQUEUE_BURST_SIZE_DEFAULT 16383
 
-enum { L2_INDEX, L3_INDEX, L4_INDEX, END_INDEX };
+enum { L2_INDEX, VLAN_INDEX, L3_INDEX, L4_INDEX, END_INDEX };
 
 static int RteFlowBypassGetBypassInfoMPSize(const char *, uint32_t *);
 static int RteFlowBypassLoadConf(const char *, uint32_t *, uint32_t *, uint32_t *);
-static int RteFlowBypassGetNodeInt(SCConfNode *, uint32_t *, const char *, uint32_t);
+static int RteFlowBypassGetNodeInt(SCConfNode *, uint32_t *, const char *, uint32_t, bool);
 static int RteFlowBypassRuleCreate(
         RteFlowBypassData *, struct rte_flow_item *, int, struct rte_flow **);
 static void RteBypassFree(void *data);
@@ -200,7 +200,7 @@ static int RteFlowBypassGetBypassInfoMPSize(const char *driver_name, uint32_t *b
 }
 
 static int RteFlowBypassGetNodeInt(
-        SCConfNode *root_node, uint32_t *cfg_ret, const char *cfg_str, uint32_t def)
+        SCConfNode *root_node, uint32_t *cfg_ret, const char *cfg_str, uint32_t def, bool is_pow2)
 {
     SCEnter();
     uint32_t cfg_curr = 0;
@@ -221,12 +221,11 @@ static int RteFlowBypassGetNodeInt(
         SCLogError(
                 "Configuration for %s is set to %d, but must be greater than 0", cfg_str, cfg_curr);
         SCReturnInt(-EINVAL);
-    } else if (!rte_is_power_of_2(cfg_curr)) {
+    } else if (is_pow2 && !rte_is_power_of_2(cfg_curr)) {
         SCLogError(
                 "Configuration for %s is set to %d, but must be a power of 2", cfg_str, cfg_curr);
         SCReturnInt(-EINVAL);
     }
-    SCLogConfig("%s set to %d", cfg_str, cfg_curr);
     *cfg_ret = cfg_curr;
     SCReturnInt(0);
 }
@@ -236,10 +235,20 @@ static int RteFlowBypassLoadConf(const char *driver_name, uint32_t *bypass_ring_
 {
     SCConfNode *dpdk_root = SCConfGetNode("dpdk");
     int retval = 0;
+
     retval += RteFlowBypassGetNodeInt(
-            dpdk_root, bypass_ring_size, "bypass-ring-size", RTE_BYPASS_RING_SIZE_DEFAULT);
+            dpdk_root, bypass_ring_size, "bypass-ring-size", RTE_BYPASS_RING_SIZE_DEFAULT, true);
+    SCLogConfig("bypass-ring-size set to %d", *bypass_ring_size);
+
     retval += RteFlowBypassGetNodeInt(dpdk_root, bypass_ring_dequeue_burst_size,
-            "bypass-ring-dequeue-burst-size", RTE_BYPASS_RING_DEQUEUE_BURST_SIZE_DEFAULT);
+            "bypass-ring-dequeue-burst-size", RTE_BYPASS_RING_DEQUEUE_BURST_SIZE_DEFAULT, false);
+    if (*bypass_ring_size < *bypass_ring_dequeue_burst_size) {
+        SCLogWarning("Configuration for bypass-ring-dequeue-burst-size (%d) is larger than bypass-ring-size (%d), capping to %d",
+                *bypass_ring_size, *bypass_ring_dequeue_burst_size, *bypass_ring_size - 1);
+        *bypass_ring_dequeue_burst_size = *bypass_ring_size - 1;
+    }
+    SCLogConfig("bypass-ring-dequeue-burst-size set to %d", *bypass_ring_dequeue_burst_size);
+
     retval += RteFlowBypassGetBypassInfoMPSize(driver_name, bypass_info_mempool_size);
     SCReturnInt(retval);
 }
@@ -341,6 +350,7 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_rules_active);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_rules_created);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_rules_error);
+    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_rules_query_error);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_ring_enqueue_success);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_ring_enqueue_error_ring_full);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_ring_dequeue_success);
@@ -349,10 +359,9 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_ring_ops);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_flows_bypass_success);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_flows_bypass_error);
-    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_flow_lookup_error);
+    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_flows_lookup_error);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_mempool_key_get_error);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_mempool_info_get_error);
-    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_query_error);
 
     iconf->dpdk_dev_resources->rte_flow_bypass_data = rte_flow_bypass_data;
 
@@ -365,6 +374,7 @@ cleanup:
         rte_mempool_free(bypass_mp);
     if (bypass_info_mp != NULL)
         rte_mempool_free(bypass_info_mp);
+    SCFree(rte_flow_bypass_data->ring_dequeue_buffer);
     SCFree(rte_flow_bypass_data);
     rte_flow_bypass_data = NULL;
     SCReturnInt(retval);
@@ -449,7 +459,7 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, LiveDevice *livedev,
     if (retval != 0) {
         SCLogError("rte_flow dynamic bypass: count query error %s errmsg: %s",
                 rte_strerror(-retval), flow_error.message);
-        SC_ATOMIC_ADD(livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_query_error, 1);
+        SC_ATOMIC_ADD(livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_query_error, 1);
     } else {
         src_packets = query_count.hits;
         src_bytes = query_count.bytes;
@@ -462,7 +472,7 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, LiveDevice *livedev,
     if (retval != 0) {
         SCLogError("rte_flow dynamic bypass: count query error %s errmsg: %s",
                 rte_strerror(-retval), flow_error.message);
-        SC_ATOMIC_ADD(livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_query_error, 1);
+        SC_ATOMIC_ADD(livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_query_error, 1);
     } else {
         dst_packets = query_count.hits;
         dst_bytes = query_count.bytes;
@@ -597,8 +607,8 @@ int RteFlowBypassRuleLoad(
     RteFlowBypassData *rte_flow_bypass_data = (RteFlowBypassData *)data;
     struct rte_ring *bypass_ring = rte_flow_bypass_data->bypass_ring;
     struct rte_mempool *bypass_mp = rte_flow_bypass_data->bypass_mp;
-    struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 }, { 0 } };
-    uint16_t ring_dequeue_num = rte_flow_bypass_data->rte_ring_dequeue_burst_size;
+    struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 }, { 0 }, { 0 } };
+    uint32_t ring_dequeue_num = rte_flow_bypass_data->rte_ring_dequeue_burst_size;
     uint32_t success_count = 0;
     FlowKey **ring_data = rte_flow_bypass_data->ring_dequeue_buffer;
 
@@ -632,6 +642,7 @@ int RteFlowBypassRuleLoad(
             }
             SCReturnInt(success_count);
         }
+        struct rte_flow_item_vlan vlan_spec = { 0 }, vlan_mask = { 0 };
         struct rte_flow_item_ipv4 ipv4_spec = { 0 }, ipv4_mask = { 0 };
         struct rte_flow_item_ipv6 ipv6_spec = { 0 }, ipv6_mask = { 0 };
         struct rte_flow_item_tcp tcp_spec = { 0 }, tcp_mask = { 0 };
@@ -650,7 +661,7 @@ int RteFlowBypassRuleLoad(
                                     rte_flow_bypass_data->rte_bypass_rule_capacity) {
             if (flow == NULL) {
                 /* Flow expired before we could create its bypass rule */
-                SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flow_lookup_error, 1);
+                SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flows_lookup_error, 1);
             } else {
                 /* NIC rule capacity exhausted, fall back to local bypass */
                 SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flows_bypass_error, 1);
@@ -658,6 +669,20 @@ int RteFlowBypassRuleLoad(
                 FLOWLOCK_UNLOCK(flow);
             }
             continue;
+        }
+
+        /* If the flow is VLAN tagged, insert a VLAN pattern item matching the
+         * outermost VLAN ID so the bypass rule only matches tagged traffic of
+         * this flow. */
+        if (flow->vlan_idx > 0) {
+            SCLogDebug("Add a VLAN rte_flow bypass rule (VLAN ID %u)", flow->vlan_id[0]);
+            vlan_spec.hdr.vlan_tci = htons(flow->vlan_id[0]);
+            vlan_mask.hdr.vlan_tci = htons(0x0FFF);
+            items[VLAN_INDEX].type = RTE_FLOW_ITEM_TYPE_VLAN;
+            items[VLAN_INDEX].spec = &vlan_spec;
+            items[VLAN_INDEX].mask = &vlan_mask;
+        } else {
+            items[VLAN_INDEX].type = RTE_FLOW_ITEM_TYPE_VOID;
         }
 
         /* Create rte_flow rule for original direction */

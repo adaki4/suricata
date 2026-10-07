@@ -134,16 +134,15 @@ typedef struct DPDKThreadVars_ {
     StatsCounterId capture_dpdk_rte_bypass_ring_dequeue_success;
     StatsCounterId capture_dpdk_rte_bypass_ring_max;
     StatsCounterAvgId capture_dpdk_rte_bypass_ring_occupancy_avg;
-    /* bypass.flows.* — Suricata flows bypass succeeded/failed for */
+    /* bypass.flows.* — Suricata flows bypass stats */
     StatsCounterId capture_dpdk_rte_bypass_flows_bypass_success;
     StatsCounterId capture_dpdk_rte_bypass_flows_bypass_error;
-    /* bypass.flow_lookup_error — flow-hash lookup failure during rule creation */
-    StatsCounterId capture_dpdk_rte_bypass_flow_lookup_error;
+    StatsCounterId capture_dpdk_rte_bypass_flows_lookup_error;
     /* bypass.mempool.* — bypass mempool allocation failures */
     StatsCounterId capture_dpdk_rte_bypass_mempool_key_get_error;
     StatsCounterId capture_dpdk_rte_bypass_mempool_info_get_error;
     /* bypass.query_error — rte_flow_query() failures */
-    StatsCounterId capture_dpdk_rte_bypass_query_error;
+    StatsCounterId capture_dpdk_rte_bypass_rules_query_error;
     bool capture_bypass_enabled;
     unsigned int flags;
     uint16_t threads;
@@ -351,14 +350,14 @@ static inline void DPDKDumpCounters(DPDKThreadVars *ptv)
                     SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_flows_bypass_success));
             StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_flows_bypass_error,
                     SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_flows_bypass_error));
-            StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_flow_lookup_error,
-                    SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_flow_lookup_error));
+            StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_flows_lookup_error,
+                    SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_flows_lookup_error));
             StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_mempool_key_get_error,
                     SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_mempool_key_get_error));
             StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_mempool_info_get_error,
                     SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_mempool_info_get_error));
-            StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_query_error,
-                    SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_query_error));
+            StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_rules_query_error,
+                    SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_query_error));
             /* We calculate the average ring occupancy as a sum of ring occupancies throughout
              * multiple measurements divided by the number of measurements. We then pass this result
              * StatsCounterAvgAddI64() */
@@ -769,21 +768,20 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
             StatsRegisterCounter("capture.dpdk.bypass.ring.occupancy_max", &ptv->tv->stats);
     ptv->capture_dpdk_rte_bypass_ring_occupancy_avg =
             StatsRegisterAvgCounter("capture.dpdk.bypass.ring.occupancy_avg", &ptv->tv->stats);
-    /* bypass.flows.* — Suricata flows bypass succeeded/failed for */
+    /* bypass.flows.* — Suricata flows bypass stats */
     ptv->capture_dpdk_rte_bypass_flows_bypass_success =
             StatsRegisterCounter("capture.dpdk.bypass.flows.success", &ptv->tv->stats);
     ptv->capture_dpdk_rte_bypass_flows_bypass_error =
             StatsRegisterCounter("capture.dpdk.bypass.flows.error", &ptv->tv->stats);
-    /* bypass.flow_lookup_error — flow-hash lookup failure during rule creation */
-    ptv->capture_dpdk_rte_bypass_flow_lookup_error =
-            StatsRegisterCounter("capture.dpdk.bypass.flow_lookup_error", &ptv->tv->stats);
+    ptv->capture_dpdk_rte_bypass_flows_lookup_error =
+            StatsRegisterCounter("capture.dpdk.bypass.flows_lookup_error", &ptv->tv->stats);
     /* bypass.mempool.* — bypass mempool allocation failures */
     ptv->capture_dpdk_rte_bypass_mempool_key_get_error =
             StatsRegisterCounter("capture.dpdk.bypass.mempool.key_get_error", &ptv->tv->stats);
     ptv->capture_dpdk_rte_bypass_mempool_info_get_error =
             StatsRegisterCounter("capture.dpdk.bypass.mempool.info_get_error", &ptv->tv->stats);
     /* bypass.query_error — rte_flow_query() failures */
-    ptv->capture_dpdk_rte_bypass_query_error =
+    ptv->capture_dpdk_rte_bypass_rules_query_error =
             StatsRegisterCounter("capture.dpdk.bypass.query_error", &ptv->tv->stats);
     ptv->capture_bypass_enabled = dpdk_config->capture_bypass_enabled;
     ptv->copy_mode = dpdk_config->copy_mode;
