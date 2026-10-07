@@ -77,6 +77,8 @@ typedef struct DPDKIfaceConfig_ {
     DPDKDeviceResources *dpdk_dev_resources;
     uint16_t linkup_timeout; // in seconds how long to wait for link to come up
     bool capture_bypass_enabled;
+    /* id of the NIC the interface belongs to */
+    uint16_t resource_id;
     SC_ATOMIC_DECLARE(uint16_t, ref);
     /* threads bind queue id one by one */
     SC_ATOMIC_DECLARE(uint16_t, queue_id);

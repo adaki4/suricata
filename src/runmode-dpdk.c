@@ -127,6 +127,7 @@ static void DPDKDerefConfig(void *conf);
 #define DPDK_CONFIG_DEFAULT_LINKUP_TIMEOUT              0
 #define DPDK_CONFIG_DEFAULT_COPY_MODE                   "none"
 #define DPDK_CONFIG_DEFAULT_COPY_INTERFACE              "none"
+#define DPDK_CONFIG_DEFAULT_CAPTURE_BYPASS              0
 
 DPDKIfaceConfigAttributes dpdk_yaml = {
     .threads = "threads",
@@ -146,6 +147,7 @@ DPDKIfaceConfigAttributes dpdk_yaml = {
     .copy_mode = "copy-mode",
     .copy_iface = "copy-iface",
     .capture_bypass = "capture-bypass",
+    .resource_id = "resource-id",
 };
 
 /**
@@ -346,6 +348,7 @@ static void ConfigInit(DPDKIfaceConfig **iconf)
         FatalError("Could not allocate memory for DPDKIfaceConfig");
 
     ptr->out_port_id = UINT16_MAX; // make sure no port is set
+    ptr->resource_id = DPDK_RESOURCE_ID_UNSET; // no user-defined NIC identity
     SC_ATOMIC_INIT(ptr->ref);
     (void)SC_ATOMIC_ADD(ptr->ref, 1);
     ptr->DerefFunc = DPDKDerefConfig;
@@ -812,6 +815,13 @@ static void ConfigSetVlanStrip(DPDKIfaceConfig *iconf, int entry_bool)
     SCReturn;
 }
 
+static void ConfigSetCaptureBypass(DPDKIfaceConfig *iconf, int entry_bool)
+{
+    SCEnter();
+    iconf->capture_bypass_enabled = entry_bool;
+    SCReturn;
+}
+
 static int ConfigSetCopyIface(DPDKIfaceConfig *iconf, const char *entry_str)
 {
     SCEnter();
@@ -1052,10 +1062,21 @@ static int ConfigLoad(DPDKIfaceConfig *iconf, const char *iface)
     if (retval < 0)
         SCReturnInt(retval);
 
-    /* Global flag dpdk.capture-bypass is set to each interface */
-    retval = ConfigSetCaptureBypass(iconf);
-    if (retval < 0)
-        SCReturnInt(retval);
+    retval = SCConfGetChildValueBoolWithDefault(
+            if_root, if_default, dpdk_yaml.capture_bypass, &entry_bool);
+    if (retval != 1) {
+        ConfigSetCaptureBypass(iconf, DPDK_CONFIG_DEFAULT_CAPTURE_BYPASS);
+    } else {
+        ConfigSetCaptureBypass(iconf, entry_bool);
+    }
+
+    retval = SCConfGetChildValueIntWithDefault(
+            if_root, if_default, dpdk_yaml.resource_id, &entry_int);
+    if (retval == 1) {
+        retval = ConfigSetResourceId(iconf, entry_int);
+        if (retval < 0)
+            SCReturnInt(retval);
+    }
 
     SCReturnInt(0);
 }
@@ -1645,26 +1666,43 @@ static int DeviceConfigureDynamicBypass(
 {
     SCEnter();
     int retval = 0;
-    if (!iconf->capture_bypass_enabled) {
-        SCReturnInt(retval);
+    static int dev_trecking = 1;
+    static bool found_bypass_enabled = false;
+
+    if (iconf->capture_bypass_enabled) {
+        found_bypass_enabled = true;
+
+        if (SCConfGetBool("livedev.use-for-tracking", &dev_trecking) == 1 && !dev_trecking) {
+            SCLogWarning("%s: rte_flow capture bypass is not supported with "
+                         "livedev.use-for-tracking disabled",
+                    iconf->iface);
+            SCReturnInt(-EINVAL);
+        }
+
+        if (iconf->copy_mode != DPDK_COPY_MODE_NONE) {
+            SCLogError("%s: rte_flow capture bypass is supported only in IDS mode", iconf->iface);
+            SCReturnInt(-EINVAL);
+        }
+
+        const char *driver_name = dev_info->driver_name;
+        if (strcmp(driver_name, "mlx5_pci") == 0) {
+            retval = RteBypassRegister(iconf, driver_name);
+        } else {
+            SCLogError("%s: rte_flow capture bypass is not supported for driver %s", iconf->iface,
+                    driver_name);
+            retval = -ENOTSUP;
+        }
+
+        if (retval == 0) {
+            SCLogConfig("%s rte_flow capture bypass enabled", iconf->iface);
+        } else {
+            SCLogError("%s: rte_flow capture bypass initialization failed", iconf->iface);
+        }
     }
 
-    if (iconf->copy_mode != DPDK_COPY_MODE_NONE) {
-        SCLogError("%s: rte_flow capture bypass is supported only in IDS mode", iconf->iface);
-        SCReturnInt(-EINVAL);
+    if (found_bypass_enabled && DPDKConfiguredDeviceCount() == (uint32_t)LiveGetDeviceCount()) {
+        retval = RteBypassFinalize();
     }
-
-    const char *driver_name = dev_info->driver_name;
-    if (strcmp(driver_name, "mlx5_pci") == 0) {
-        retval = RteBypassInit(iconf, driver_name);
-    } else {
-        SCLogError("%s: rte_flow capture bypass is not supported for driver %s", iconf->iface,
-                driver_name);
-        SCReturnInt(-ENOTSUP);
-    }
-
-    if (retval == 0)
-        SCLogConfig("%s rte_flow capture bypass enabled", iconf->iface);
     SCReturnInt(retval);
 }
 /**

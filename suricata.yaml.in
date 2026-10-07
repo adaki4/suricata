@@ -811,8 +811,6 @@ dpdk:
     proc-type: primary
 
   # DPDK capture support
-  # Toggle support of hardware accelerated flow bypass.
-  capture-bypass: no
   # The following bypass.* features are only applicable when
   # 'capture-bypass' is enabled.
 
@@ -855,6 +853,12 @@ dpdk:
       # - ips: the same as tap mode but it also drops packets that are flagged by rules to be dropped
       copy-mode: none
       copy-iface: none # or PCIe address of the second interface
+      # Toggle support of hardware accelerated flow bypass.
+      capture-bypass: false
+      # Applicable only with capture-bypass set to true.
+      # All interfaces which share resources used with capture bypass (e.g. rte_flow rules) need to be
+      # marked with the same ID.
+      resource-id: 1
 
     - interface: default
       threads: auto

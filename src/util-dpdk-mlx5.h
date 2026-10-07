@@ -25,13 +25,16 @@
 #define UTIL_DPDK_MLX5_H
 
 #include "suricata-common.h"
+#include "util-dpdk.h"
 
 #ifdef HAVE_DPDK
 
 #define MLX5_RTE_FLOW_RULES_CAPACITY 4194304
 
-int mlx5DevicePostStartActions(
-        int port_id, uint16_t nb_rx_queues, char *port_name, bool capture_bypass_enabled);
+typedef struct DPDKIfaceConfig_ DPDKIfaceConfig;
+
+int mlx5DevicePostStartActions(int port_id, uint16_t nb_rx_queues, char *port_name,
+        DPDKDeviceResources *dpdk_vars, DPDKIfaceConfig *dpdk_config);
 
 #endif /* HAVE_DPDK */
 

@@ -30,8 +30,10 @@
  *
  */
 
+#include "decode.h"
 #include "util-debug.h"
 #include "util-dpdk.h"
+#include "source-dpdk.h"
 #include "util-dpdk-bonding.h"
 #include "util-dpdk-mlx5.h"
 #include "util-dpdk-rss.h"
@@ -43,16 +45,37 @@
 
 static int mlx5DeviceSetRSS(int, uint16_t, char *, uint16_t);
 
-int mlx5DevicePostStartActions(
-        int port_id, uint16_t nb_rx_queues, char *port_name, bool capture_bypass_enabled)
+/**
+ * \brief Post-start device actions specific to the mlx5 driver: create the
+ *        rte_flow jump rule for capture bypass (if enabled) and install the
+ *        RSS steering rule into the appropriate flow group.
+ *
+ * \param port_id port id of the device
+ * \param nb_rx_queues number of RX queues of the device
+ * \param port_name name of the device's port
+ * \param dpdk_vars DPDK device resources of the device
+ * \param dpdk_config configuration of the device
+ * \return int 0 on success, negative value on error
+ */
+int mlx5DevicePostStartActions(int port_id, uint16_t nb_rx_queues, char *port_name,
+        DPDKDeviceResources *dpdk_vars, DPDKIfaceConfig *dpdk_config)
 {
     int retval = 0;
-    if (capture_bypass_enabled) {
-        retval += RteFlowCreateJumpRule(port_id);
-        retval += mlx5DeviceSetRSS(port_id, nb_rx_queues, port_name, RTE_JUMP_GROUP);
-    } else {
-        retval += mlx5DeviceSetRSS(port_id, nb_rx_queues, port_name, RTE_DEFAULT_GROUP);
+    uint16_t group = RTE_DEFAULT_GROUP;
+
+    if (dpdk_config->capture_bypass_enabled) {
+        retval = RteFlowCreateJumpRule(port_id, port_name);
+        if (retval != 0) {
+            SCLogWarning("%s: rte_flow jump rule creation failed, disabling rte_flow capture "
+                         "bypass on this interface",
+                    port_name);
+            RteFlowBypassDataUnregisterNic(dpdk_vars, port_name);
+            group = RTE_DEFAULT_GROUP;
+        } else {
+            group = RTE_JUMP_GROUP;
+        }
     }
+    retval = mlx5DeviceSetRSS(port_id, nb_rx_queues, port_name, group);
     return retval;
 }
 
@@ -73,7 +96,8 @@ static int mlx5DeviceSetRSS(int port_id, uint16_t nb_rx_queues, char *port_name,
     struct rte_flow_action_rss rss_action_conf =
             DPDKInitRSSAction(rss_conf, nb_rx_queues, queues, RTE_ETH_HASH_FUNCTION_TOEPLITZ, true);
 
-    int retval = DPDKCreateRSSFlowGeneric(port_id, port_name, rss_action_conf, group);
+    int retval = DPDKCreateRSSFlowGeneric(
+            port_id, port_name, rss_action_conf, group, RTE_LOW_PRIORITY_1);
     if (retval != 0) {
         retval = rte_flow_flush(port_id, &flush_error);
         if (retval != 0) {

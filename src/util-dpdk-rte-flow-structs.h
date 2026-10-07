@@ -45,19 +45,36 @@ typedef struct RteFlowRuleStorage_ {
     struct rte_flow **rule_handlers;
 } RteFlowRuleStorage;
 
+#define RTE_BYPASS_MAX_NICS 64
+
+typedef struct RteFlowNicBudget_ {
+    uint32_t resource_id;
+    uint32_t rule_capacity;
+    SC_ATOMIC_DECLARE(uint32_t, rules_active);
+    SC_ATOMIC_DECLARE(uint32_t, rules_created);
+    SC_ATOMIC_DECLARE(uint32_t, rules_error);
+} RteFlowNicBudget;
+
+#define RTE_BYPASS_DRIVER_NAME_MAX 32
+
 typedef struct RteFlowBypassData_ {
     struct rte_mempool *bypass_info_mp;
     struct rte_mempool *bypass_mp;
     struct rte_ring *bypass_ring;
     uint32_t rte_ring_dequeue_burst_size;
-    uint32_t rte_bypass_rule_capacity;
     FlowKey **ring_dequeue_buffer;
-    /* ID of livedev that updates shared stats in DPDKDumpCounters() */
+    /* ID of livedev that updates shared stats in DPDKDumpCounters();
+     * recorded by RteBypassRegister() on first successful registration. */
     uint32_t counter_update_livedev_id;
+    /* Summed driver rule capacity of all registered NICs (used to size
+     * bypass_info_mp when not user-configured). */
+    uint32_t total_rule_capacity;
+    RteFlowNicBudget nic_budgets[RTE_BYPASS_MAX_NICS];
+    uint32_t nic_cnt;
+    uint32_t bypass_ifs_expected;
+    uint32_t bypass_ifs_failed;
     SC_ATOMIC_DECLARE(uint32_t, ref_cnt);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_created);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_error);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_active);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_query_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_ring_enqueue_success);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_ring_enqueue_error_ring_full);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_ring_dequeue_success);
@@ -66,10 +83,9 @@ typedef struct RteFlowBypassData_ {
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_ring_ops);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flows_bypass_success);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flows_bypass_error);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flow_lookup_error);
+    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_flows_lookup_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_mempool_key_get_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_mempool_info_get_error);
-    SC_ATOMIC_DECLARE(uint32_t, rte_bypass_query_error);
 } RteFlowBypassData;
 
 #endif /* HAVE_DPDK */
