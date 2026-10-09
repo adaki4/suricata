@@ -40,6 +40,7 @@ typedef struct {
     uint16_t pkt_mp_capa;
 #ifdef HAVE_DPDK
     RteFlowBypassData *rte_flow_bypass_data;
+    RteFlowNicBudget *nic_budget;
 #endif /* HAVE_DPDK */
     uint16_t port_id;
 } DPDKDeviceResources;

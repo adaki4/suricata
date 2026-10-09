@@ -331,12 +331,20 @@ static inline void DPDKDumpCounters(DPDKThreadVars *ptv)
                 ptv->livedev->dpdk_vars->rte_flow_bypass_data->counter_update_livedev_id ==
                         ptv->livedev->id) {
             RteFlowBypassData *rte_flow_bypass_data = ptv->livedev->dpdk_vars->rte_flow_bypass_data;
-            StatsCounterMaxUpdateI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_rules_max,
-                    SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active));
-            StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_rules_created,
-                    SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_created));
-            StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_rules_error,
-                    SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_error));
+            /* Rule counters are tracked per physical NIC: aggregate all NIC
+             * budgets for the global stats dump. */
+            uint32_t rules_active = 0, rules_created = 0, rules_error = 0;
+            for (uint32_t i = 0; i < rte_flow_bypass_data->nic_cnt; i++) {
+                rules_active += SC_ATOMIC_GET(rte_flow_bypass_data->nic_budgets[i].rules_active);
+                rules_created += SC_ATOMIC_GET(rte_flow_bypass_data->nic_budgets[i].rules_created);
+                rules_error += SC_ATOMIC_GET(rte_flow_bypass_data->nic_budgets[i].rules_error);
+            }
+            StatsCounterMaxUpdateI64(
+                    &ptv->tv->stats, ptv->capture_dpdk_rte_bypass_rules_max, rules_active);
+            StatsCounterSetI64(
+                    &ptv->tv->stats, ptv->capture_dpdk_rte_bypass_rules_created, rules_created);
+            StatsCounterSetI64(
+                    &ptv->tv->stats, ptv->capture_dpdk_rte_bypass_rules_error, rules_error);
             StatsCounterSetI64(&ptv->tv->stats, ptv->capture_dpdk_rte_bypass_ring_enqueue_success,
                     SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_ring_enqueue_success));
             StatsCounterSetI64(&ptv->tv->stats,
@@ -616,13 +624,14 @@ static void HandleShutdown(DPDKThreadVars *ptv)
         // packets to our port. Instead, we know, that we are done with the peered port, so
         // we stop it. The peered threads will stop our port.
         if (ptv->capture_bypass_enabled) {
-            if (SC_ATOMIC_GET(
-                        ptv->livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_active) !=
-                    0) {
+            /* Wait for the rules of this port's physical NIC (they are flushed
+             * right after with rte_flow_flush of this port). The budget is
+             * cached on the interface, resolved once at init. */
+            RteFlowNicBudget *nic_budget = ptv->livedev->dpdk_vars->nic_budget;
+            if (nic_budget != NULL && SC_ATOMIC_GET(nic_budget->rules_active) != 0) {
                 SCLogInfo("Waiting for all bypass rte_flow rules to be removed");
                 uint32_t wait_loops = 0;
-                while (SC_ATOMIC_GET(ptv->livedev->dpdk_vars->rte_flow_bypass_data
-                                             ->rte_bypass_rules_active) != 0) {
+                while (SC_ATOMIC_GET(nic_budget->rules_active) != 0) {
                     rte_delay_us(100000);
                     wait_loops++;
                     if (wait_loops > 100) {
