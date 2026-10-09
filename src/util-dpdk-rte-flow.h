@@ -44,11 +44,12 @@
 int ConfigSetCaptureBypass(DPDKIfaceConfig *);
 int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name);
 int RteFlowBypassCallback(Packet *);
-bool RteBypassUpdate(Flow *flow, void *data, time_t tsec);
+bool RteBypassUpdate(Flow *flow, void *data, time_t tsec, uint32_t fm_id);
 void RteBypassFree(void *data);
 int RteFlowCreateJumpRule(uint16_t, const char *, RteFlowBypassData *rte_flow_bypass_data);
 void RteFlowSetFlowBypassInfo(FlowBypassInfo *fc,
         Flow *flow, struct rte_flow *src_handler, struct rte_flow *dst_handler, struct rte_flow_action_list_handle *src_action_list_handle, struct rte_flow_action_list_handle *dst_action_list_handle, int family);
+void RteFlowAsyncPull(uint16_t port_id, uint16_t queue_id, RteFlowBypassData *bypass_data);
 /* Template API resource management */
 struct rte_flow *RteFlowCreateRuleAsync(int port_id, uint32_t queue_id, struct rte_flow_template_table *table,
 				  struct rte_flow_item *pattern, uint8_t pt_index, struct rte_flow_action *actions, uint8_t at_index, void *user_data);

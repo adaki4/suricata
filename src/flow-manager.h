@@ -31,6 +31,7 @@ void FlowWakeupFlowRecyclerThread(void);
 void FlowTimeoutsInit(void);
 void FlowTimeoutsEmergency(void);
 void FlowManagerThreadSpawn(void);
+uint32_t FlowManagerGetNumber(void);
 void FlowDisableFlowManagerThread(void);
 void FlowRecyclerThreadSpawn(void);
 void FlowDisableFlowRecyclerThread(void);

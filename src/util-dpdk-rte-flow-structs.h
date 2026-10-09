@@ -58,6 +58,7 @@ enum RteItemsOrder {
 
 typedef struct Packet_ Packet;
 typedef struct Flow_ Flow;
+typedef struct FlowBypassInfo_ FlowBypassInfo;
 typedef struct RteFlowBypassData_ RteFlowBypassData;
 
 typedef struct RteFlowTemplateResources_ {
@@ -86,10 +87,13 @@ typedef struct RteFlowHandlerToFlow_ {
 } RteFlowHandlerToFlow;
 
 typedef struct RteFlowBypassData_ {
+    uint16_t port_id;
+    uint16_t nb_rx_queues;
+    uint32_t rte_bypass_rule_capacity;
     struct rte_mempool *bypass_info_mp;
     struct rte_mempool *bypass_mp;
     struct rte_ring *bypass_ring;
-    uint32_t rte_bypass_rule_capacity;
+    /* Counters*/
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_created);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_active);
@@ -100,35 +104,24 @@ typedef struct RteFlowBypassData_ {
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_mempool_key_get_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_mempool_info_get_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_query_error);
-    /* Aggregate packet/byte counters of all bypassed flows. These feed the
-     * flow_bypassed.packets / flow_bypassed.bytes stats via RteFlowCheckRules. */
-    SC_ATOMIC_DECLARE(uint64_t, rte_bypass_pkts);
-    SC_ATOMIC_DECLARE(uint64_t, rte_bypass_bytes);
+    /* Async resources */
     RteFlowTemplateResources *rss_resources;
     RteFlowTemplateResources *jump_resources;
     RteFlowTemplateResources *bypass_resources_ipv4;
     RteFlowTemplateResources *bypass_resources_ipv6;
-    uint16_t port_id;
-    uint16_t nb_rx_queues;
+    /* Callbacks */
     int (*RteFlowDeviceBypassCallback)(Packet *p);
     int (*RteFlowDeviceBypassUpdateStats)(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
     void (*RteFlowDeviceDestroyRule)(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info);
     int (*RteFlowDeviceTemplatesInit)(uint16_t port_id, uint16_t queues_nb, const char *port_name, RteFlowBypassData *rte_flow_bypass_data);
     int (*RteFlowDeviceCreateIndirectAction)(uint16_t port_id, RteFlowHandlerToFlow *flow_handler_info);
-    bool (*RteFlowDeviceHandleUpdate)(bool activity, RteFlowHandlerToFlow *flow_handler_info, RteFlowBypassData *bypass_data);
+    bool (*RteFlowDeviceHandleUpdate)(uint16_t queue_id, FlowBypassInfo *fc, RteFlowHandlerToFlow *flow_handler_info, RteFlowBypassData *bypass_data);
     uint16_t rte_flow_manager_queue_base;
     uint32_t nb_flow_manager_queues;
     // TODO change value
     char drive_name[30];
 } RteFlowBypassData;
-
-/** \brief Holds RSS Template API resources for cleanup on device close */
-typedef struct RteFlowRSSTemplateResources_ {
-    struct rte_flow_template_table *tbl;
-    struct rte_flow_pattern_template *pt;
-    struct rte_flow_actions_template *at;
-} RteFlowRSSTemplateResources;
-
+ 
 static const struct rte_flow_item pattern_template_novlan_ipv4_tcp[] = {
 	{ .type = RTE_FLOW_ITEM_TYPE_ETH },
 	{ .type = RTE_FLOW_ITEM_TYPE_VOID }, // NOTE: This is here just for convinience

@@ -106,6 +106,16 @@ void FlowTimeoutsEmergency(void)
     SC_ATOMIC_SET(flow_timeouts, flow_timeouts_emerg);
 }
 
+/**
+ * \brief Get the number of flow manager threads configured for this run.
+ *
+ * \return Configured number of flow manager threads.
+ */
+uint32_t FlowManagerGetNumber(void)
+{
+    return flowmgr_number;
+}
+
 typedef struct FlowTimeoutCounters_ {
     uint32_t rows_checked;
     uint32_t rows_skipped;
@@ -232,7 +242,8 @@ static bool FlowManagerFlowTimeout(Flow *f, SCTime_t ts, uint32_t *next_ts, cons
  *  \retval false not timeout
  *  \retval true timeout (or not capture bypassed)
  */
-static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters *counters)
+static inline bool FlowBypassedTimeout(
+        Flow *f, SCTime_t ts, FlowTimeoutCounters *counters, uint32_t fm_id)
 {
     if (f->flow_state != FLOW_STATE_CAPTURE_BYPASSED) {
         return true;
@@ -246,7 +257,7 @@ static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters
         uint64_t bytes_tosrc = fc->tosrcbytecnt;
         uint64_t pkts_todst = fc->todstpktcnt;
         uint64_t bytes_todst = fc->todstbytecnt;
-        bool update = fc->BypassUpdate(f, fc->bypass_data, SCTIME_SECS(ts));
+        bool update = fc->BypassUpdate(f, fc->bypass_data, SCTIME_SECS(ts), fm_id);
         const bool shutdown = (SC_ATOMIC_GET(flow_flags) & FLOW_SHUTDOWN);
         if (update || shutdown) {
             SCLogDebug("Updated flow: %" PRId64 "", FlowGetId(f));
@@ -279,6 +290,10 @@ typedef struct FlowManagerTimeoutThread {
     /* used to temporarily store flows that have timed out and are
      * removed from the hash to reduce locking contention */
     FlowQueuePrivate aside_queue;
+    /* FlowManager instance id (fm_id). Propagated down to BypassUpdate
+     * callbacks so device-specific handlers can address per-FM resources
+     * (e.g. rte_flow async queues) keyed by the calling FM thread. */
+    uint32_t fm_id;
 } FlowManagerTimeoutThread;
 
 /**
@@ -377,7 +392,7 @@ static void FlowManagerHashRowTimeout(FlowManagerTimeoutThread *td, Flow *f, SCT
 #ifdef CAPTURE_OFFLOAD
         /* never prune a flow that is used by a packet we
          * are currently processing in one of the threads */
-        if (!FlowBypassedTimeout(f, ts, counters)) {
+        if (!FlowBypassedTimeout(f, ts, counters, td->fm_id)) {
             FLOWLOCK_UNLOCK(f);
             prev_f = f;
             f = f->next;
@@ -743,6 +758,7 @@ static TmEcode FlowManagerThreadInit(ThreadVars *t, const void *initdata, void *
         return TM_ECODE_FAILED;
 
     ftd->instance = SC_ATOMIC_ADD(flowmgr_cnt, 1);
+    ftd->timeout.fm_id = ftd->instance;
     SCLogDebug("flow manager instance %u", ftd->instance);
 
     /* set the min and max value used for hash row walking

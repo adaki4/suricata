@@ -613,6 +613,14 @@ static void HandleShutdown(DPDKThreadVars *ptv)
     }
 }
 
+static void PeriodicBypassCheck(DPDKThreadVars *ptv)
+{
+    if (!ptv->capture_bypass_enabled && ptv->livedev->dpdk_vars == NULL)
+        return;
+        
+    RteFlowAsyncPull(ptv->port_id, ptv->queue_id, ptv->livedev->dpdk_vars->rte_flow_bypass_data);
+}
+
 static void PeriodicDPDKDumpCounters(DPDKThreadVars *ptv)
 {
     static thread_local SCTime_t last_dump = { 0 };
@@ -650,6 +658,7 @@ static TmEcode ReceiveDPDKLoop(ThreadVars *tv, void *data, void *slot)
         if (RXPacketCountHeuristic(tv, ptv, nb_rx)) {
             continue;
         }
+        PeriodicBypassCheck(ptv);
 
         ptv->pkts += (uint64_t)nb_rx;
         for (uint16_t i = 0; i < nb_rx; i++) {

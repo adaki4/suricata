@@ -52,6 +52,7 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 static struct rte_flow_action_list_handle *nfbDeviceRteFlowCreateIndirectAction(uint16_t, RteFlowHandlerToFlow *);
+static int nfbDeviceRteFlowUpdateStats(uint16_t, RteFlowHandlerToFlow *);
 
 static const struct rte_flow_action indir_handle_actions[] = {
 	{ .type = RTE_FLOW_ACTION_TYPE_CONNTRACK },
@@ -84,8 +85,11 @@ int nfbDeviceRteFlowTemplatesInit(uint16_t port_id, uint16_t queues_nb, const ch
     struct rte_flow_error flow_error = { 0 };
     int retval = rte_flow_configure(
         port_id, &port_attr, queues_nb, queue_attrs, &flow_error);
-    if (retval < 0) { 
-        SCLogError("%s: rte_flow_configure failed: %s", port_name, flow_error.message);
+    if (retval < 0) {
+        SCLogError("%s: rte_flow_configure failed (retval=%d, rte_errno=%d=%s, cause=%p): %s",
+                port_name, retval, rte_errno,
+                rte_strerror(rte_errno), flow_error.cause,
+                flow_error.message ? flow_error.message : "(no message)");
         SCReturnInt(retval);
     }
 
@@ -97,7 +101,44 @@ int nfbDeviceRteFlowTemplatesInit(uint16_t port_id, uint16_t queues_nb, const ch
     SCReturnInt(0);
 }
 
-int nfbDeviceRteFlowUpdateStats(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info)
+bool nfbDeviceRteFlowHandleUpdate(uint16_t queue_id, FlowBypassInfo *fc, RteFlowHandlerToFlow *flow_handler_info, RteFlowBypassData *bypass_data)
+{
+    bool activity = false;
+    if (flow_handler_info->src_handle == NULL ) {
+        return false;
+    }
+
+    uint64_t old_src_pkts = flow_handler_info->count_src.hits;
+    uint64_t old_dst_pkts = flow_handler_info->count_dst.hits;
+
+    nfbDeviceRteFlowUpdateStats(queue_id, flow_handler_info);
+
+    if (flow_handler_info->count_src.hits > old_src_pkts || flow_handler_info->count_dst.hits > old_dst_pkts) {
+        fc->tosrcpktcnt += flow_handler_info->count_src.hits;
+        fc->tosrcbytecnt += flow_handler_info->count_src.bytes;
+        fc->todstpktcnt +=  flow_handler_info->count_dst.hits;
+        fc->todstbytecnt += flow_handler_info->count_dst.bytes;
+        activity = true;
+    }
+
+    /* We flush all the rules at shutdown */
+    if (unlikely(suricata_ctl_flags != 0)) {
+        flow_handler_info->src_handle = NULL;
+        SC_ATOMIC_SUB(bypass_data->rte_bypass_rules_active, 1);
+        return activity;
+    }
+
+    if (!activity) {
+        if (flow_handler_info->src_handle != NULL) {
+            nfbDeviceRteFlowRuleDestroy(flow_handler_info->in_queue_id, flow_handler_info);
+            flow_handler_info->src_handle = NULL;
+            SC_ATOMIC_SUB(bypass_data->rte_bypass_rules_active, 1);
+        }
+    }
+    return activity;
+}
+
+static int nfbDeviceRteFlowUpdateStats(uint16_t queue_id, RteFlowHandlerToFlow *flow_handler_info)
 {
     struct rte_flow_op_attr op_attr = { .postpone = 0 };
     struct rte_flow_error flow_error = { 0 };
@@ -212,27 +253,7 @@ void nfbDeviceRteFlowRuleDestroy(uint16_t queue_id, RteFlowHandlerToFlow *flow_h
         }
         loops++;
     }
-
 }
-
-bool nfbDeviceRteFlowHandleUpdate(bool activity, RteFlowHandlerToFlow *flow_handler_info, RteFlowBypassData *bypass_data)
-{
-    if (unlikely(suricata_ctl_flags != 0)) {
-        flow_handler_info->src_handle = NULL;
-        SC_ATOMIC_SUB(bypass_data->rte_bypass_rules_active, 1);
-        return activity;
-    }
-
-    if (!activity) {
-        if (flow_handler_info->src_handle != NULL) {
-            nfbDeviceRteFlowRuleDestroy(flow_handler_info->in_queue_id, flow_handler_info);
-            flow_handler_info->src_handle = NULL;
-            SC_ATOMIC_SUB(bypass_data->rte_bypass_rules_active, 1);
-        }
-    }
-    return activity;
-}
-
 
 /** \brief Create hardware (rte_flow) rule for the incomign flow.  
  * 

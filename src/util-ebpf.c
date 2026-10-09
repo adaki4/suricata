@@ -655,8 +655,9 @@ static bool EBPFBypassCheckHalfFlow(Flow *f, FlowBypassInfo *fc,
  * Update lastts in the flow and do accounting
  *
  * */
-bool EBPFBypassUpdate(Flow *f, void *data, time_t tsec)
+bool EBPFBypassUpdate(Flow *f, void *data, time_t tsec, uint32_t fm_id)
 {
+    (void)fm_id; /* unused for eBPF bypass — only rte_flow path keys off FM id */
     EBPFBypassData *eb = (EBPFBypassData *)data;
     if (eb == NULL) {
         return false;

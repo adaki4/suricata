@@ -56,6 +56,7 @@
 
 #define COUNT_ACTION_ID        1
 
+
 #define RTE_BYPASS_RING_NAME         "rte_bypass_ring"
 #define RTE_BYPASS_MEMPOOL_NAME      "rte_bypass_mempool"
 #define RTE_BYPASS_INFO_MEMPOOL_NAME "rte_bypass_info_mempool"
@@ -83,7 +84,7 @@ static void RteFlowHandleEmergency(ThreadVars *, Flow *, void *);
 static int RteFlowUpdateStats(FlowBypassInfo *, RteFlowHandlerToFlow *);
 static int RteFlowCheckRules(ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
 static uint32_t DeviceDecideRteFlowRulesCapacity(const char *);
-static int RteFlowBypassBeforeStartInit(uint16_t, const char *, const char *, RteFlowBypassData *);
+static int RteFlowBypassAsyncResourcesInit(uint16_t, const char *, const char *, RteFlowBypassData *);
 
 static uint16_t rte_bypass_manager_queue_id;
 
@@ -572,7 +573,7 @@ int RteFlowCreateJumpRule(uint16_t port_id, const char *port_name, RteFlowBypass
     SCReturnInt(0);
 }
 
-static int RteFlowBypassBeforeStartInit(uint16_t port_id, const char *driver_name, const char *port_name, RteFlowBypassData *rte_flow_bypass_data)
+static int RteFlowBypassAsyncResourcesInit(uint16_t port_id, const char *driver_name, const char *port_name, RteFlowBypassData *rte_flow_bypass_data)
 {
     uint32_t nb_flowmgr = 1;
 
@@ -591,16 +592,13 @@ static void RteFlowBypassRegisterCallbacks(const char *driver_name, RteFlowBypas
 {
     if (strcmp(driver_name, "mlx5_pci") == 0) {
         bypass_data->RteFlowDeviceBypassCallback = mlx5DeviceRteFlowBypassCallback;
-        bypass_data->RteFlowDeviceBypassUpdateStats = mlx5DeviceRteFlowUpdateStats;
         bypass_data->RteFlowDeviceDestroyRule = mlx5DeviceRteFlowRuleDestroy;
         bypass_data->RteFlowDeviceTemplatesInit = mlx5DeviceRteFlowTemplatesInit;
         bypass_data->RteFlowDeviceHandleUpdate = mlx5DeviceRteFlowHandleUpdate;
-
     }
 
     if (strcmp(driver_name, "net_nfb") == 0) {
         bypass_data->RteFlowDeviceBypassCallback = nfbDeviceRteFlowBypassCallback;
-        bypass_data->RteFlowDeviceBypassUpdateStats = nfbDeviceRteFlowUpdateStats;
         bypass_data->RteFlowDeviceDestroyRule = nfbDeviceRteFlowRuleDestroy;
         bypass_data->RteFlowDeviceTemplatesInit = nfbDeviceRteFlowTemplatesInit;
         bypass_data->RteFlowDeviceHandleUpdate = nfbDeviceRteFlowHandleUpdate;
@@ -632,12 +630,19 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
         SCReturnInt(retval);
     }
 
-    RunModeEnablesBypassManager();
     rte_flow_bypass_data = SCCalloc(1, sizeof(RteFlowBypassData));
     if (rte_flow_bypass_data == NULL) {
         SCLogError("%s: Memory allocation for RteFlowBypassData failed", port_name);
         SCReturnInt(-ENOMEM);
     }
+
+    RunModeEnablesBypassManager();
+
+    /* NFB: Do not register, only one thread can operate with one rule queue */
+    //BypassedFlowManagerRegisterCheckFunc(RteFlowCheckRules, NULL, (void *)rte_flow_bypass_data);
+
+    /* Destroys rte_flow rules of bypassed flows evicted during emergency mode */
+    // SCFlowRegisterFinishCallback(RteFlowHandleEmergency, NULL);
 
     RteFlowBypassRegisterCallbacks(driver_name, rte_flow_bypass_data);
 
@@ -661,16 +666,12 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
 
     rte_flow_bypass_data->nb_rx_queues = iconf->nb_rx_queues;
 
-    BypassedFlowManagerRegisterCheckFunc(RteFlowCheckRules, NULL, (void *)rte_flow_bypass_data);
-
     rte_flow_bypass_data->rte_bypass_rule_capacity =
-            DeviceDecideRteFlowRulesCapacity(driver_name);
+        DeviceDecideRteFlowRulesCapacity(driver_name);
 
-    /* Destroys rte_flow rules of bypassed flows evicted during emergency mode */
-    // SCFlowRegisterFinishCallback(RteFlowHandleEmergency, NULL);
     strlcpy(rte_flow_bypass_data->drive_name, driver_name, sizeof(driver_name));
 
-    retval = RteFlowBypassBeforeStartInit(iconf->port_id, driver_name, port_name, rte_flow_bypass_data);
+    retval = RteFlowBypassAsyncResourcesInit(iconf->port_id, driver_name, port_name, rte_flow_bypass_data);
     if (retval < 0) {
         goto cleanup;
     }
@@ -684,8 +685,6 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_mempool_key_get_error);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_mempool_info_get_error);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_query_error);
-    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_pkts);
-    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_bytes);
 
     iconf->dpdk_dev_resources->rte_flow_bypass_data = rte_flow_bypass_data;
 
@@ -698,44 +697,73 @@ cleanup:
     SCReturnInt(retval);
 }
 
-static int RteFlowCheckRules(ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data)
+/**
+ * \brief Pulls the results of asynchronous flow operations and updates the state of flows accordingly.
+ * 
+ * \param port_id The DPDK port identifier.
+ * \param queue_id The queue identifier from which to pull the results.
+ * \param bypass_data Pointer to the RteFlowBypassData structure containing flow information.
+ */
+void RteFlowAsyncPull(uint16_t port_id, uint16_t queue_id, RteFlowBypassData *bypass_data)
 {
-    RteFlowBypassData *bypass_data = (RteFlowBypassData *) data;
     if (bypass_data == NULL) {
-        SCReturnInt(0);
+        return;
     }
-
-    int pull_cnt;
     const int max_res_size = 1024;
     struct rte_flow_op_result res[max_res_size];
     struct rte_flow_error flow_error = { 0 };
-    for (uint16_t q_id = 0; q_id < bypass_data->nb_rx_queues; q_id++) {
-        do {
-            pull_cnt = rte_flow_pull(bypass_data->port_id, q_id, res, max_res_size, &flow_error);
-            if (pull_cnt < 0) {
-                SCLogWarning("rte_flow bypass: worker pull failed on queue %u: %s",
-                        q_id, flow_error.message);
-                break;
-            }
-            for (int i = 0; i < pull_cnt; i++) {
-                if (res[i].status != 0 && res[i].user_data != NULL) {
-                    RteFlowHandlerToFlow *flow_handler_info =
-                            (RteFlowHandlerToFlow *)res[i].user_data;
-                    SCLogInfo("Incorrect rule");
-                    FLOWLOCK_WRLOCK(flow_handler_info->flow);
-                    FlowUpdateState(flow_handler_info->flow, FLOW_STATE_LOCAL_BYPASSED);
-                    FLOWLOCK_UNLOCK(flow_handler_info->flow);
-                    SC_ATOMIC_ADD(bypass_data->rte_bypass_flows_bypass_error, 1);
-                }
-            }
-        } while (pull_cnt == max_res_size);
+    int pull_cnt = rte_flow_pull(port_id, queue_id, res, max_res_size, &flow_error);
+    for (int i = 0; i < pull_cnt; i++) {
+        if (res[i].status != 0 && res[i].user_data != NULL) {
+            RteFlowHandlerToFlow *flow_handler_info =
+                    (RteFlowHandlerToFlow *)res[i].user_data;
+            FLOWLOCK_WRLOCK(flow_handler_info->flow);
+            FlowUpdateState(flow_handler_info->flow, FLOW_STATE_LOCAL_BYPASSED);
+            FLOWLOCK_UNLOCK(flow_handler_info->flow);
+            SC_ATOMIC_ADD(bypass_data->rte_bypass_flows_bypass_error, 1);
+        }
     }
-
-    if (bypassstats != NULL) {
-        bypassstats->count = SC_ATOMIC_GET(bypass_data->rte_bypass_rules_active);
-    }
-    SCReturnInt(1);
 }
+
+/* Not needed when one thread does all the work */
+// static int RteFlowCheckRules(ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data)
+// {
+//     RteFlowBypassData *bypass_data = (RteFlowBypassData *) data;
+//     if (bypass_data == NULL) {
+//         SCReturnInt(0);
+//     }
+
+//     int pull_cnt;
+//     const int max_res_size = 1024;
+//     struct rte_flow_op_result res[max_res_size];
+//     struct rte_flow_error flow_error = { 0 };
+//     for (uint16_t q_id = 0; q_id < bypass_data->nb_rx_queues; q_id++) {
+//         do {
+//             pull_cnt = rte_flow_pull(bypass_data->port_id, q_id, res, max_res_size, &flow_error);
+//             if (pull_cnt < 0) {
+//                 SCLogWarning("rte_flow bypass: worker pull failed on queue %u: %s",
+//                         q_id, flow_error.message);
+//                 break;
+//             }
+//             for (int i = 0; i < pull_cnt; i++) {
+//                 if (res[i].status != 0 && res[i].user_data != NULL) {
+//                     RteFlowHandlerToFlow *flow_handler_info =
+//                             (RteFlowHandlerToFlow *)res[i].user_data;
+//                     SCLogInfo("Incorrect rule");
+//                     FLOWLOCK_WRLOCK(flow_handler_info->flow);
+//                     FlowUpdateState(flow_handler_info->flow, FLOW_STATE_LOCAL_BYPASSED);
+//                     FLOWLOCK_UNLOCK(flow_handler_info->flow);
+//                     SC_ATOMIC_ADD(bypass_data->rte_bypass_flows_bypass_error, 1);
+//                 }
+//             }
+//         } while (pull_cnt == max_res_size);
+//     }
+
+//     if (bypassstats != NULL) {
+//         bypassstats->count = SC_ATOMIC_GET(bypass_data->rte_bypass_rules_active);
+//     }
+//     SCReturnInt(1);
+// }
 
 /**
  * \brief Decides whether the rte_flow rule should be removed from the table
@@ -786,8 +814,7 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, RteFlowHandlerToFlow *flow_han
 // }
 
 /**
- * \brief Destroy rte_flow rule / rules associated with a flow
- *
+ * \brief Destroy rte_flow rule(s) associated with the given flow
  *
  * \param queue_id identifier of a HW queue where the will be destroyed
  * \param flow_handler_info pointer to the flow handler information containing the rule handles
@@ -811,7 +838,7 @@ void RteBypassFree(void *data)
     }
 }
 
-bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
+bool RteBypassUpdate(Flow *flow, void *data, time_t tsec, uint32_t fm_id)
 {
     RteFlowHandlerToFlow *flow_handler_info = (RteFlowHandlerToFlow *)data;
     if (flow_handler_info == NULL) {
@@ -823,54 +850,13 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
         /* Data already freed */
         return false;
     }
-    if (flow_handler_info->src_handle == NULL ) {//| flow_handler_info->dst_handle == NULL) {
-        /* Rules already deleted */
-        return false;
-    }
     LiveDevice *livedev = LiveDeviceGetById(flow->livedev_id);
     RteFlowBypassData *bypass_data = livedev->dpdk_vars->rte_flow_bypass_data;
-    bool activity = RteFlowUpdateStats(fc, flow_handler_info);
 
-    if (activity) {
-        /* The query returns cumulative HW counters. Accumulate the delta since
-         * the last call so both this flow's fc counters and the aggregate
-         * bypass counters keep growing monotonically. */
-        uint64_t dpkts = flow_handler_info->count_src.hits > fc->tosrcpktcnt ?
-                flow_handler_info->count_src.hits - fc->tosrcpktcnt : 0;
-        uint64_t dbytes = flow_handler_info->count_src.bytes > fc->tosrcbytecnt ?
-                flow_handler_info->count_src.bytes - fc->tosrcbytecnt : 0;
-        uint64_t dcpkts = flow_handler_info->count_dst.hits > fc->todstpktcnt ?
-                flow_handler_info->count_dst.hits - fc->todstpktcnt : 0;
-        uint64_t dcbytes = flow_handler_info->count_dst.bytes > fc->todstbytecnt ?
-                flow_handler_info->count_dst.bytes - fc->todstbytecnt : 0;
-
-        fc->tosrcpktcnt = flow_handler_info->count_src.hits;
-        fc->tosrcbytecnt = flow_handler_info->count_src.bytes;
-        fc->todstpktcnt = flow_handler_info->count_dst.hits;
-        fc->todstbytecnt = flow_handler_info->count_dst.bytes;
+    bool activity = bypass_data->RteFlowDeviceHandleUpdate(fm_id, fc, flow_handler_info, bypass_data);
+    if (activity)
         flow->lastts = SCTIME_FROM_SECS(tsec);
 
-        if (bypass_data != NULL) {
-            SC_ATOMIC_ADD(bypass_data->rte_bypass_pkts, dpkts + dcpkts);
-            SC_ATOMIC_ADD(bypass_data->rte_bypass_bytes, dbytes + dcbytes);
-        }
-    }
-    /* At shutdown, we only get the counters. We delete the rules with rte_flow_flush later */
-    if (unlikely(suricata_ctl_flags != 0)) {
-        flow_handler_info->src_handle = NULL;
-        flow_handler_info->dst_handle = NULL;
-        SC_ATOMIC_SUB(bypass_data->rte_bypass_rules_active, 2);
-        return activity;
-    }
-
-    if (!activity) {
-        if (flow_handler_info->src_handle != NULL) { //&& flow_handler_info->dst_handle != NULL) {
-            RteFlowRuleDestroy(0, flow_handler_info);
-            flow_handler_info->src_handle = NULL;
-            flow_handler_info->dst_handle = NULL;
-            SC_ATOMIC_SUB(bypass_data->rte_bypass_rules_active, 2);
-        }
-    }
     SCReturnBool(activity);
 }
 

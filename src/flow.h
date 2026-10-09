@@ -529,7 +529,7 @@ typedef struct FlowProtoFreeFunc_ {
 } FlowProtoFreeFunc;
 
 typedef struct FlowBypassInfo_ {
-    bool (* BypassUpdate)(Flow *f, void *data, time_t tsec);
+    bool (* BypassUpdate)(Flow *f, void *data, time_t tsec, uint32_t fm_id);
     void (* BypassFree)(void *data);
     void *bypass_data;
     uint64_t tosrcpktcnt;
