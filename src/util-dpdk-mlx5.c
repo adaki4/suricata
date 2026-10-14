@@ -48,7 +48,7 @@ int mlx5DevicePostStartActions(
 {
     int retval = 0;
     if (capture_bypass_enabled) {
-        retval += RteFlowCreateJumpRule(port_id);
+        retval += RteFlowCreateJumpRule(port_id, port_name);
         retval += mlx5DeviceSetRSS(port_id, nb_rx_queues, port_name, RTE_JUMP_GROUP);
     } else {
         retval += mlx5DeviceSetRSS(port_id, nb_rx_queues, port_name, RTE_DEFAULT_GROUP);

@@ -161,7 +161,7 @@ static RteFlowNicBudget *RteFlowBypassDataRegisterNic(
  * \param port_id port id of the device to create the rule on
  * \return int 0 on success, negative value on error
  */
-int RteFlowCreateJumpRule(uint16_t port_id)
+int RteFlowCreateJumpRule(uint16_t port_id, char *port_name)
 {
     struct rte_flow_error flow_error = { 0 };
     struct rte_flow_attr attr = { 0 };
@@ -183,7 +183,7 @@ int RteFlowCreateJumpRule(uint16_t port_id)
 
     struct rte_flow *flow_handler = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
     if (flow_handler == NULL) {
-        FatalError("Error when creating rte_flow jump rule: %s", flow_error.message);
+        FatalError("%s: Error when creating rte_flow jump rule: %s", port_name, flow_error.message);
         SCReturnInt(-1);
     }
     SCReturnInt(0);

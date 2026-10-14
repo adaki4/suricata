@@ -45,7 +45,7 @@ int ConfigSetCaptureBypass(DPDKIfaceConfig *);
 int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name);
 void RteBypassIncRef(RteFlowBypassData *bypass_data);
 void RteBypassDecRef(RteFlowBypassData **bypass_data);
-int RteFlowCreateJumpRule(uint16_t port_id);
+int RteFlowCreateJumpRule(uint16_t port_id, char *port_name);
 int RteFlowBypassCallback(Packet *);
 int RteFlowBypassRuleLoad(
         ThreadVars *th_v, struct flows_stats *bypassstats, struct timespec *curtime, void *data);
