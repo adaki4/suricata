@@ -1666,17 +1666,20 @@ static int DeviceConfigureDynamicBypass(
 {
     SCEnter();
     int retval = 0;
-    static int dev_trecking = 1;
     static bool found_bypass_enabled = false;
+    static bool found_dev_tracking = false;
 
     if (iconf->capture_bypass_enabled) {
         found_bypass_enabled = true;
 
-        if (SCConfGetBool("livedev.use-for-tracking", &dev_trecking) == 1 && !dev_trecking) {
+        int dev_tracking;
+        if (!found_dev_tracking && SCConfGetBool("livedev.use-for-tracking", &dev_tracking) == 1 && !dev_tracking) {
             SCLogWarning("%s: rte_flow capture bypass is not supported with "
                          "livedev.use-for-tracking disabled",
                     iconf->iface);
             SCReturnInt(-EINVAL);
+        } else {
+            found_dev_tracking = true;
         }
 
         if (iconf->copy_mode != DPDK_COPY_MODE_NONE) {

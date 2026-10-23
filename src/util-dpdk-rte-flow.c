@@ -158,9 +158,12 @@ static uint32_t DeviceDecideRteFlowRulesCapacity(const char *driver_name)
 int ConfigSetResourceId(DPDKIfaceConfig *iconf, intmax_t entry_int)
 {
     SCEnter();
-    if (entry_int < 0 || entry_int > UINT16_MAX || entry_int == DPDK_RESOURCE_ID_UNSET) {
+    if (entry_int < 0 || entry_int > UINT16_MAX) {
         SCLogError("%s: resource-id needs to be between 0 and %d", iconf->iface,
                 DPDK_RESOURCE_ID_UNSET - 1);
+        SCReturnInt(-EINVAL);
+    } else if (entry_int == DPDK_RESOURCE_ID_UNSET && iconf->capture_bypass_enabled) {
+        SCLogError("%s: capture-bypass enabled but resource-id not set", iconf->iface);
         SCReturnInt(-EINVAL);
     }
     iconf->resource_id = (uint16_t)entry_int;
@@ -174,7 +177,6 @@ int ConfigSetResourceId(DPDKIfaceConfig *iconf, intmax_t entry_int)
  * The mempool is shared by all physical NICs, so when not user-configured its
  * size is derived from the summed rte_flow rule capacity of all devices.
  *
- * \param driver_name name of the driver (for logging)
  * \param total_capacity summed rte_flow rule capacity of all devices
  * \param[out] bypass_info_mp_size size of the mempool from config or maximum
  * capacity of rte_flow rules all devices can handle.
@@ -486,13 +488,16 @@ void RteFlowBypassDataUnregisterNic(DPDKDeviceResources *dpdk_vars, const char *
     if (bypass_data == NULL)
         return;
 
+     
+    bypass_data->bypass_ifs_failed++;
+    int ifs_failed = bypass_data->bypass_ifs_failed;
+    RteBypassDecRef(&rte_flow_bypass_data);
     dpdk_vars->nic_budget = NULL;
     dpdk_vars->rte_flow_bypass_data = NULL;
-    bypass_data->bypass_ifs_failed++;
 
-    SCLogInfo("bypass ifs failed %d bypass ifs expected %d", bypass_data->bypass_ifs_failed,
+    SCLogInfo("bypass ifs failed %d bypass ifs expected %d", ifs_failed,
             bypass_data->bypass_ifs_expected);
-    if (bypass_data->bypass_ifs_failed == bypass_data->bypass_ifs_expected) {
+    if (ifs_failed == bypass_data->bypass_ifs_expected) {
         FatalError(
                 "rte_flow capture bypass failed on all configured interfaces, none support bypass");
         return;
@@ -835,7 +840,7 @@ int RteFlowBypassRuleLoad(
         /* If the flow is VLAN tagged, insert a VLAN pattern item matching the
          * outermost VLAN ID so the bypass rule only matches tagged traffic of
          * this flow. */
-        if (flow->vlan_idx > 0) {
+        if (flow->vlan_idx) {
             SCLogDebug("Add a VLAN rte_flow bypass rule (VLAN ID %u)", flow->vlan_id[0]);
             vlan_spec.hdr.vlan_tci = htons(flow->vlan_id[0]);
             vlan_mask.hdr.vlan_tci = htons(0x0FFF);
@@ -844,6 +849,8 @@ int RteFlowBypassRuleLoad(
             items[VLAN_INDEX].mask = &vlan_mask;
         } else {
             items[VLAN_INDEX].type = RTE_FLOW_ITEM_TYPE_VOID;
+            items[VLAN_INDEX].spec = NULL;
+            items[VLAN_INDEX].mask = NULL;
         }
 
         /* Create rte_flow rule for original direction */
