@@ -812,9 +812,8 @@ dpdk:
 
   # DPDK capture support
   # The following bypass.* features are only applicable when
-  # 'capture-bypass' is enabled.
-
-  # Configures how many flows the NIC can offload at once.
+  # atleast one DPDK interace has capture-bypass set to true true
+  # Configures how many flows can bypass offload at once.
   # bypass-info-mp-size: auto
   # Sets how many flows can wait for HW offload at once. Needs to be a power of 2.
   # bypass-ring-size: auto
