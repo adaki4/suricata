@@ -697,7 +697,7 @@ rule_failed:
 
 static void RteFlowHandleEmergency(ThreadVars *tv, Flow *f, void *data)
 {
-    if (f->flow_state != FLOW_STATE_CAPTURE_BYPASSED &&
+    if (f->flow_state != FLOW_STATE_CAPTURE_BYPASSED ||
             (f->flow_end_flags & FLOW_END_FLAG_EMERGENCY) == 0) {
         return;
     }
