@@ -212,9 +212,10 @@ static inline void DPDKFreeMbufArray(
     }
 }
 
-static void DevicePostStartPMDSpecificActions(
+static int DevicePostStartPMDSpecificActions(
         DPDKThreadVars *ptv, DPDKIfaceConfig *dpdk_config, const char *driver_name)
 {
+    int retval = 0;
     if (strcmp(driver_name, "net_bonding") == 0)
         driver_name = BondingDeviceDriverGet(ptv->port_id);
     if (strcmp(driver_name, "net_i40e") == 0)
@@ -224,11 +225,13 @@ static void DevicePostStartPMDSpecificActions(
     else if (strcmp(driver_name, "net_ice") == 0)
         iceDeviceSetRSS(ptv->port_id, ptv->threads, ptv->livedev->dev);
     else if (strcmp(driver_name, "mlx5_pci") == 0) {
-        mlx5DevicePostStartActions(ptv->port_id, ptv->threads, ptv->livedev->dev,
+        /* mlx5 does more than simple RSS configuration, needs a retval check */
+        retval = mlx5DevicePostStartActions(ptv->port_id, ptv->threads, ptv->livedev->dev,
                 ptv->livedev->dpdk_vars, dpdk_config);
         if (ptv->livedev->dpdk_vars->rte_flow_bypass_data == NULL)
             ptv->capture_bypass_enabled = false;
     }
+    return retval;
 }
 
 static void DevicePreClosePMDSpecificActions(DPDKThreadVars *ptv, const char *driver_name)

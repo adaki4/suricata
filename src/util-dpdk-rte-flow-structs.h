@@ -71,8 +71,9 @@ typedef struct RteFlowBypassData_ {
     uint32_t total_rule_capacity;
     RteFlowNicBudget nic_budgets[RTE_BYPASS_MAX_NICS];
     uint32_t nic_cnt;
-    uint32_t bypass_ifs_expected;
-    uint32_t bypass_ifs_failed;
+
+    SC_ATOMIC_DECLARE(uint32_t, bypass_ifs_expected);
+    SC_ATOMIC_DECLARE(uint32_t, bypass_ifs_failed);
     SC_ATOMIC_DECLARE(uint32_t, ref_cnt);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_rules_query_error);
     SC_ATOMIC_DECLARE(uint32_t, rte_bypass_ring_enqueue_success);

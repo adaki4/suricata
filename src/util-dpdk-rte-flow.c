@@ -322,6 +322,8 @@ int RteBypassRegister(DPDKIfaceConfig *iconf, const char *driver_name)
             SCReturnInt(-ENOMEM);
         }
         SC_ATOMIC_INIT(rte_flow_bypass_data->ref_cnt);
+        SC_ATOMIC_INIT(rte_flow_bypass_data->bypass_ifs_expected);
+        SC_ATOMIC_INIT(rte_flow_bypass_data->bypass_ifs_failed);
         rte_flow_bypass_data->counter_update_livedev_id = livedev->id;
     }
 
@@ -350,6 +352,42 @@ int RteBypassRegister(DPDKIfaceConfig *iconf, const char *driver_name)
 }
 
 /**
+ * \brief Count the number of live interfaces whose "capture-bypass" setting
+ *        resolves to true in the dpdk.interfaces configuration.
+ *
+ * \return uint32_t number of interfaces that requested capture bypass
+ */
+static int RteBypassCountConfiguredIfs(void)
+{
+    SCConfNode *dpdk_node = SCConfGetNode("dpdk.interfaces");
+    if (dpdk_node == NULL) {
+        return 0;
+    }
+    SCConfNode *if_default = SCConfNodeLookupKeyValue(dpdk_node, "interface", "default");
+    uint32_t cnt = 0;
+    LiveDevice *ldev = NULL, *ndev = NULL;
+    while (LiveDeviceForEach(&ldev, &ndev)) {
+        const char *live_dev = ldev->dev;
+        if (live_dev == NULL) {
+            continue;
+        }
+        SCConfNode *if_root = ConfFindDeviceConfig(dpdk_node, live_dev);
+        if (if_root == NULL) {
+            if (if_default == NULL) {
+                continue;
+            }
+            if_root = if_default;
+        }
+        int entry_bool = 0;
+        if (SCConfGetChildValueBoolWithDefault(if_root, if_default, "capture-bypass",
+                    &entry_bool) == 1 && entry_bool) {
+            cnt++;
+        }
+    }
+    return cnt;
+}
+
+/**
  * \brief Finalize the shared rte_flow bypass: create the shared ring and
  *        mempools, register the BypassManager callback and the flow finish
  *        callback.
@@ -359,15 +397,26 @@ int RteBypassRegister(DPDKIfaceConfig *iconf, const char *driver_name)
 int RteBypassFinalize(void)
 {
     SCEnter();
+    static int bypass_ifs_configured = -1;
+
     if (rte_flow_bypass_data == NULL) {
         SCReturnInt(0);
     }
 
-    if (rte_flow_bypass_data->bypass_ifs_expected != 0) {
+    if (SC_ATOMIC_GET(rte_flow_bypass_data->bypass_ifs_expected) != 0) {
+        SCReturnInt(0);
+    }
+
+    if (bypass_ifs_configured < 0) {
+        bypass_ifs_configured = (int)RteBypassCountConfiguredIfs();
+    }
+    if (bypass_ifs_initialized < (uint32_t)bypass_ifs_configured) {
+        SCLogDebug("rte_flow bypass: %u of %u bypass interfaces registered, delaying finalize",
+                bypass_ifs_initialized, bypass_ifs_configured);
         SCReturnInt(0);
     }
     int retval = 0;
-    rte_flow_bypass_data->bypass_ifs_expected = bypass_ifs_initialized;
+    SC_ATOMIC_SET(rte_flow_bypass_data->bypass_ifs_expected, bypass_ifs_initialized);
 
     uint32_t bypass_ring_size = 0, bypass_mp_size = 0, bypass_info_mp_size = 0;
     retval = RteFlowBypassLoadConf(rte_flow_bypass_data->total_rule_capacity, &bypass_ring_size,
@@ -455,7 +504,7 @@ cleanup:
         SCFree(rte_flow_bypass_data->ring_dequeue_buffer);
         rte_flow_bypass_data->ring_dequeue_buffer = NULL;
     }
-    rte_flow_bypass_data->bypass_ifs_expected = 0;
+    SC_ATOMIC_SET(rte_flow_bypass_data->bypass_ifs_expected, 0);
     rte_flow_bypass_data->counter_update_livedev_id = RTE_BYPASS_LIVEDEV_ID_UNSET;
     LiveDevice *ldev = NULL, *ndev = NULL;
     while (LiveDeviceForEach(&ldev, &ndev)) {
@@ -478,30 +527,25 @@ cleanup:
  * \param dpdk_vars DPDK device resources of the device
  * \param port_name name of the device's port, used for logging
  */
-void RteFlowBypassDataUnregisterNic(DPDKDeviceResources *dpdk_vars, const char *port_name)
+int RteFlowBypassDataUnregisterNic(DPDKDeviceResources *dpdk_vars, const char *port_name)
 {
-    SCLogInfo("%s: rte_flow capture bypass disabled on this interface", port_name);
-    if (dpdk_vars == NULL)
-        return;
-
+    SCEnter();
+    if (dpdk_vars == NULL || dpdk_vars->rte_flow_bypass_data == NULL)
+        SCReturnInt(-1);
     RteFlowBypassData *bypass_data = dpdk_vars->rte_flow_bypass_data;
-    if (bypass_data == NULL)
-        return;
 
-     
-    bypass_data->bypass_ifs_failed++;
-    int ifs_failed = bypass_data->bypass_ifs_failed;
+    uint32_t ifs_failed = SC_ATOMIC_ADD(bypass_data->bypass_ifs_failed, 1); + 1;
+    uint32_t ifs_expected = SC_ATOMIC_GET(bypass_data->bypass_ifs_expected);
     RteBypassDecRef(&rte_flow_bypass_data);
     dpdk_vars->nic_budget = NULL;
     dpdk_vars->rte_flow_bypass_data = NULL;
 
-    SCLogInfo("bypass ifs failed %d bypass ifs expected %d", ifs_failed,
-            bypass_data->bypass_ifs_expected);
-    if (ifs_failed == bypass_data->bypass_ifs_expected) {
-        FatalError(
-                "rte_flow capture bypass failed on all configured interfaces, none support bypass");
-        return;
+    if (ifs_failed == ifs_expected) {
+        SCLogWarning(
+                "rte_flow capture bypass failed on all configured interfaces");
+        SCReturnInt(-1);
     }
+    SCReturnInt(0);
 }
 
 /**

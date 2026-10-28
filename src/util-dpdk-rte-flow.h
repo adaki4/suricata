@@ -49,7 +49,7 @@ int RteBypassRegister(DPDKIfaceConfig *iconf, const char *driver_name);
 int RteBypassFinalize(void);
 void RteBypassIncRef(RteFlowBypassData *bypass_data);
 void RteBypassDecRef(RteFlowBypassData **bypass_data);
-void RteFlowBypassDataUnregisterNic(DPDKDeviceResources *dpdk_vars, const char *port_name);
+int RteFlowBypassDataUnregisterNic(DPDKDeviceResources *dpdk_vars, const char *port_name);
 int RteFlowCreateJumpRule(uint16_t port_id, const char *port_name);
 int RteFlowBypassCallback(Packet *);
 int RteFlowBypassRuleLoad(

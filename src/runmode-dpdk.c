@@ -1666,12 +1666,9 @@ static int DeviceConfigureDynamicBypass(
 {
     SCEnter();
     int retval = 0;
-    static bool found_bypass_enabled = false;
     static bool found_dev_tracking = false;
 
     if (iconf->capture_bypass_enabled) {
-        found_bypass_enabled = true;
-
         int dev_tracking;
         if (!found_dev_tracking && SCConfGetBool("livedev.use-for-tracking", &dev_tracking) == 1 && !dev_tracking) {
             SCLogWarning("%s: rte_flow capture bypass is not supported with "
@@ -1688,22 +1685,23 @@ static int DeviceConfigureDynamicBypass(
         }
 
         const char *driver_name = dev_info->driver_name;
-        if (strcmp(driver_name, "mlx5_pci") == 0) {
+        if (strcmp(driver_name, "mlx5_pci") == 0 &&
+                !(iconf->flags & DPDK_CONFIGURED_BYPASS)) {
             retval = RteBypassRegister(iconf, driver_name);
-        } else {
+        } else if (!(iconf->flags & DPDK_CONFIGURED_BYPASS)) {
             SCLogError("%s: rte_flow capture bypass is not supported for driver %s", iconf->iface,
                     driver_name);
             retval = -ENOTSUP;
         }
 
-        if (retval == 0) {
+        if (retval == 0 && !(iconf->flags & DPDK_CONFIGURED_BYPASS)) {
             SCLogConfig("%s rte_flow capture bypass enabled", iconf->iface);
-        } else {
+            iconf->flags |= DPDK_CONFIGURED_BYPASS;
+        } else if (retval != 0) {
             SCLogError("%s: rte_flow capture bypass initialization failed", iconf->iface);
+            SCReturnInt(retval);
         }
-    }
 
-    if (found_bypass_enabled && DPDKConfiguredDeviceCount() == (uint32_t)LiveGetDeviceCount()) {
         retval = RteBypassFinalize();
     }
     SCReturnInt(retval);

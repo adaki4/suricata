@@ -43,6 +43,9 @@ typedef enum { DPDK_COPY_MODE_NONE, DPDK_COPY_MODE_TAP, DPDK_COPY_MODE_IPS } Dpd
 // Offloads
 #define DPDK_RX_CHECKSUM_OFFLOAD (1 << 4) /**< Enable chsum offload */
 
+#define DPDK_CONFIGURED (1 << 5) /**< DeviceConfigure() completed for this interface */
+#define DPDK_CONFIGURED_BYPASS (1 << 6) /**< Enable capture bypass */
+
 void DPDKSetTimevalOfMachineStart(void);
 
 typedef struct DPDKWorkerSync_ {
