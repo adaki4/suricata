@@ -218,8 +218,13 @@ int RteFlowTemplateResourcesInit(uint16_t port_id, RteFlowBypassData *data)
 
     struct rte_flow_item_ipv6 ipv6_spec = {0};
     struct rte_flow_item_ipv6 ipv6_mask = {0};
+#if RTE_VERSION >= RTE_VERSION_NUM(24, 0, 0, 0)
+    memset(ipv6_mask.hdr.src_addr.a, 0xFF, 16);
+    memset(ipv6_mask.hdr.dst_addr.a, 0xFF, 16);
+#else
     memset(ipv6_mask.hdr.src_addr, 0xFF, 16);
     memset(ipv6_mask.hdr.dst_addr, 0xFF, 16);
+#endif /* RTE_VERSION >= RTE_VERSION_NUM(24, 0, 0, 0) */
 
 	struct rte_flow_item_tcp tcp_spec = {0};
 	struct rte_flow_item_tcp tcp_mask = {
