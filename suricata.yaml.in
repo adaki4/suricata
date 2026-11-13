@@ -811,14 +811,13 @@ dpdk:
     proc-type: primary
 
   # DPDK capture support
-  # Toggle support of hardware accelerated flow bypass.
-  capture-bypass: no
   # The following bypass.* features are only applicable when
-  # 'capture-bypass' is enabled.
+  # atleast one DPDK interace has capture-bypass set to true.
 
-  # Configures how many flows the NIC can offload at once.
+  # Configures how many flows can bypass offload at once. Ideal size is (2^n)-1.
+  # If configured to larger than maximum supported by HW, then capped to that maximum.
   # bypass-info-mp-size: auto
-  # Sets how many flows can wait for HW offload at once. Needs to be a power of 2.
+  # Sets how many flows can wait for HW offload at once. Needs to 2^n.
   # bypass-ring-size: auto
   # Defines how many flows are dequeued from bypass-ring at once. 
   # Needs to be less than bypass-ring-size.
@@ -855,6 +854,14 @@ dpdk:
       # - ips: the same as tap mode but it also drops packets that are flagged by rules to be dropped
       copy-mode: none
       copy-iface: none # or PCIe address of the second interface
+      # Toggle support of hardware accelerated flow bypass (per-interface).
+      # Requires IDS mode and livedev.use-for-tracking set to true.
+      capture-bypass: false
+      # Required when capture-bypass is true.
+      # Integer in 0-65534 identifying the physical NIC for rule-capacity
+      # budgeting. Interfaces sharing the same physical NIC (e.g. two
+      # logical ports on one multi-port mlx5 card) must use the same id.
+      resource-id: 1
 
     - interface: default
       threads: auto

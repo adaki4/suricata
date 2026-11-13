@@ -38,7 +38,9 @@
 #include "runmode-dpdk.h"
 #include "util-byte.h"
 #include "util-debug.h"
+#include "util-conf.h"
 #include "util-dpdk.h"
+#include "source-dpdk.h"
 #include "util-dpdk-ice.h"
 #include "util-dpdk-mlx5.h"
 #include "util-dpdk-rte-flow.h"
@@ -46,6 +48,7 @@
 #include "flow-private.h"
 #include "flow.h"
 #include "runmodes.h"
+#include "threads.h"
 #include "tm-threads.h"
 #include "suricata.h"
 
@@ -59,59 +62,72 @@
 #define RTE_BYPASS_RING_SIZE_DEFAULT               16384
 #define RTE_BYPASS_RING_DEQUEUE_BURST_SIZE_DEFAULT 16383
 
-enum { L2_INDEX, L3_INDEX, L4_INDEX, END_INDEX };
+enum { L2_INDEX, VLAN_INDEX, L3_INDEX, L4_INDEX, END_INDEX };
 
-static int RteFlowBypassGetBypassInfoMPSize(const char *, uint32_t *);
-static int RteFlowBypassLoadConf(const char *, uint32_t *, uint32_t *, uint32_t *);
-static int RteFlowBypassGetNodeInt(SCConfNode *, uint32_t *, const char *, uint32_t);
+static int RteFlowBypassGetBypassInfoMPSize(uint32_t, uint32_t *);
+static int RteFlowBypassLoadConf(uint32_t, uint32_t *, uint32_t *, uint32_t *);
+static int RteFlowBypassGetNodeInt(SCConfNode *, uint32_t *, const char *, uint32_t, bool);
 static int RteFlowBypassRuleCreate(
-        RteFlowBypassData *, struct rte_flow_item *, int, struct rte_flow **);
+        RteFlowNicBudget *, struct rte_flow_item *, int, struct rte_flow **);
 static void RteBypassFree(void *data);
 static void RteFlowHandleEmergency(ThreadVars *, Flow *, void *);
 static void RteFlowBiRuleDestroy(uint16_t, struct rte_flow *, struct rte_flow *);
 static int RteFlowUpdateStats(FlowBypassInfo *, LiveDevice *, struct rte_flow *, struct rte_flow *);
-static int RteFlowSetFlowBypassInfo(Flow *, struct rte_flow *, struct rte_flow *, int);
+static int RteFlowSetFlowBypassInfo(
+        Flow *, struct rte_flow *, struct rte_flow *, RteFlowNicBudget *, int);
 static uint32_t DeviceDecideRteFlowRulesCapacity(const char *);
 
 typedef struct RteFlowHandlerToFlow_ {
     struct rte_flow *src_handler;
     struct rte_flow *dst_handler;
+    RteFlowNicBudget *nic_budget;
     uint16_t livedev_id;
 } RteFlowHandlerToFlow;
 
+static RteFlowBypassData *rte_flow_bypass_data = NULL;
+
+#define RTE_BYPASS_LIVEDEV_ID_UNSET UINT32_MAX
+
 /**
- * \brief Create a jump rule in the rte_flow default group to the group for bypass rules.
- *  In some NICs, the default group has less capacity and higher rule insertion latency.
+ * \brief Register the per-NIC rule budget of a physical NIC, if not present yet.
  *
- * \param port_id port id of the device to create the rule on
- * \return int 0 on success, negative value on error
+ * \param bypass_data shared rte_flow bypass data
+ * \param resource_id user-configured identity of the physical resource
+ * \param driver_name name of the driver (rule capacity)
+ * \return RteFlowNicBudget budget of the NIC, NULL on error
  */
-int RteFlowCreateJumpRule(uint16_t port_id)
+static RteFlowNicBudget *RteFlowBypassDataRegisterNic(
+        RteFlowBypassData *bypass_data, uint32_t resource_id, const char *driver_name)
 {
-    struct rte_flow_error flow_error = { 0 };
-    struct rte_flow_attr attr = { 0 };
-    struct rte_flow_item pattern[] = { { 0 } };
-    struct rte_flow_action action[] = { { 0 }, { 0 }, { 0 } };
-
-    attr.ingress = 1;
-    attr.priority = 0;
-    attr.group = RTE_DEFAULT_GROUP;
-
-    pattern[0].type = RTE_FLOW_ITEM_TYPE_END;
-
-    struct rte_flow_action_jump jump = {
-        .group = RTE_JUMP_GROUP,
-    };
-
-    action[0].type = RTE_FLOW_ACTION_TYPE_JUMP;
-    action[0].conf = &jump;
-
-    struct rte_flow *flow_handler = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
-    if (flow_handler == NULL) {
-        FatalError("Error when creating rte_flow jump rule: %s", flow_error.message);
-        SCReturnInt(-1);
+    if (resource_id == DPDK_RESOURCE_ID_UNSET) {
+        return NULL;
     }
-    SCReturnInt(0);
+    for (uint32_t i = 0; i < bypass_data->nic_cnt; i++) {
+        if (bypass_data->nic_budgets[i].resource_id == resource_id) {
+            /* Already registered by another interface of this NIC. */
+            return &bypass_data->nic_budgets[i];
+        }
+    }
+
+    if (bypass_data->nic_cnt >= RTE_BYPASS_MAX_NICS) {
+        SCLogError("rte_flow bypass: too many distinct physical NICs (max " PRIu32 ")",
+                RTE_BYPASS_MAX_NICS);
+        return NULL;
+    }
+
+    RteFlowNicBudget *budget = &bypass_data->nic_budgets[bypass_data->nic_cnt];
+    budget->resource_id = resource_id;
+    budget->rule_capacity = DeviceDecideRteFlowRulesCapacity(driver_name);
+    bypass_data->total_rule_capacity += budget->rule_capacity;
+    SC_ATOMIC_INIT(budget->rules_active);
+    SC_ATOMIC_INIT(budget->rules_created);
+    SC_ATOMIC_INIT(budget->rules_error);
+    bypass_data->nic_cnt++;
+
+    SCLogConfig("rte_flow bypass: physical NIC " PRIu32 " registered with capacity " PRIu32
+                " rules",
+            resource_id, budget->rule_capacity);
+    return budget;
 }
 
 /**
@@ -130,50 +146,47 @@ static uint32_t DeviceDecideRteFlowRulesCapacity(const char *driver_name)
 }
 
 /**
- * \brief Retrieve dpdk.capture-bypass and set it to all interfaces.
- *
- * Get dpdk.capture-bypass flag for enabling rte_flow bypass.
- * Set this global flag to each interface.
- * Default setting is disabled.
+ * \brief Set the user-configured identity of the physical NIC to the interface.
  *
  * \param iconf configuration of the interface
- * \return 1 if key found, 0 if not
+ * \param entry_int parsed resource-id value (intmax_t)
+ * \return 0 on success, negative value on error
  */
-int ConfigSetCaptureBypass(DPDKIfaceConfig *iconf)
+int ConfigSetResourceId(DPDKIfaceConfig *iconf, intmax_t entry_int)
 {
     SCEnter();
-    int entry_bool = 0;
-    int retval = SCConfGetBool("dpdk.capture-bypass", &entry_bool);
-    if (retval != 1) {
-        iconf->capture_bypass_enabled = false;
-    } else {
-        iconf->capture_bypass_enabled = entry_bool;
-        retval = entry_bool;
+    if (entry_int < 0 || entry_int > UINT16_MAX) {
+        SCLogError("%s: resource-id needs to be between 0 and %d", iconf->iface,
+                DPDK_RESOURCE_ID_UNSET - 1);
+        SCReturnInt(-EINVAL);
+    } else if (entry_int == DPDK_RESOURCE_ID_UNSET && iconf->capture_bypass_enabled) {
+        SCLogError("%s: capture-bypass enabled but resource-id not set", iconf->iface);
+        SCReturnInt(-EINVAL);
     }
-    SCReturnInt(retval);
+    iconf->resource_id = (uint16_t)entry_int;
+    SCLogConfig("%s: resource-id set to %" PRIu16, iconf->iface, iconf->resource_id);
+    SCReturnInt(0);
 }
 
 /**
  * \brief Get bypass-info mempool size from suricata.yaml.
  *
- * \param driver_name name of the driver
- * \param[out] bypass_info_mp_size size of the mempool from config or maximum capacity of rte_flow
- * rules the device can handle.
+ * The mempool is shared by all physical NICs, so when not user-configured its
+ * size is derived from the summed rte_flow rule capacity of all devices.
+ *
+ * \param total_capacity summed rte_flow rule capacity of all devices
+ * \param[out] bypass_info_mp_size size of the mempool from config or maximum
+ * capacity of rte_flow rules all devices can handle.
  * \return 0 on success, negative value on error
  */
-static int RteFlowBypassGetBypassInfoMPSize(const char *driver_name, uint32_t *bypass_info_mp_size)
+static int RteFlowBypassGetBypassInfoMPSize(uint32_t total_capacity, uint32_t *bypass_info_mp_size)
 {
     SCEnter();
     SCConfNode *dpdk_root = SCConfGetNode("dpdk");
 
-    uint32_t capa = DeviceDecideRteFlowRulesCapacity(driver_name);
-    if (capa < 2) {
-        SCLogWarning("rte_flow capture bypass is not supported for driver %s", driver_name);
-        SCReturnInt(-1);
-    }
-    /* We want to have a mempool of size (2^n)-1. Half the capacity of the card is enough, each
+    /* We want to have a mempool of size (2^n)-1. Half the total capacity is enough, each
      * mempool object holds info about 2 rules */
-    uint32_t max_sz = capa / 2 - 1;
+    uint32_t max_sz = total_capacity / 2 - 1;
     uint32_t sz = 0;
 
     const char *entry_str = NULL;
@@ -189,18 +202,29 @@ static int RteFlowBypassGetBypassInfoMPSize(const char *driver_name, uint32_t *b
     }
 
     if (sz > max_sz) {
-        SCLogConfig("bypass-info-mp-size too big (%d), setting it to driver (%s) maximum: %d", sz,
-                driver_name, max_sz);
+        SCLogConfig("bypass-info-mp-size too big (" PRIu32 "), setting it to the maximum: " PRIu32
+                    "",
+                sz, max_sz);
         sz = max_sz;
     } else {
-        SCLogConfig("bypass-info-mp-size set to %d", sz);
+        SCLogConfig("bypass-info-mp-size set to " PRIu32 "", sz);
     }
     *bypass_info_mp_size = sz;
     SCReturnInt(0);
 }
 
+/**
+ * \brief Get an integer value from the dpdk configuration node.
+ *
+ * \param root_node dpdk configuration node
+ * \param[out] cfg_ret parsed configuration value
+ * \param cfg_str name of the configuration key
+ * \param def default value used when the key is missing or set to "auto"
+ * \param is_pow2 whether the value must be a power of 2
+ * \return 0 on success, negative value on error
+ */
 static int RteFlowBypassGetNodeInt(
-        SCConfNode *root_node, uint32_t *cfg_ret, const char *cfg_str, uint32_t def)
+        SCConfNode *root_node, uint32_t *cfg_ret, const char *cfg_str, uint32_t def, bool is_pow2)
 {
     SCEnter();
     uint32_t cfg_curr = 0;
@@ -218,71 +242,126 @@ static int RteFlowBypassGetNodeInt(
         }
     }
     if (cfg_curr <= 0) {
-        SCLogError(
-                "Configuration for %s is set to %d, but must be greater than 0", cfg_str, cfg_curr);
+        SCLogError("Configuration for %s is set to " PRIu32 ", but must be greater than 0", cfg_str,
+                cfg_curr);
         SCReturnInt(-EINVAL);
-    } else if (!rte_is_power_of_2(cfg_curr)) {
-        SCLogError(
-                "Configuration for %s is set to %d, but must be a power of 2", cfg_str, cfg_curr);
+    } else if (is_pow2 && !rte_is_power_of_2(cfg_curr)) {
+        SCLogError("Configuration for %s is set to " PRIu32 ", but must be a power of 2", cfg_str,
+                cfg_curr);
         SCReturnInt(-EINVAL);
     }
-    SCLogConfig("%s set to %d", cfg_str, cfg_curr);
     *cfg_ret = cfg_curr;
     SCReturnInt(0);
 }
 
-static int RteFlowBypassLoadConf(const char *driver_name, uint32_t *bypass_ring_size,
+/**
+ * \brief Load the shared rte_flow bypass tunables from suricata.yaml.
+ *
+ * \param driver_name name of the driver (for logging)
+ * \param total_capacity summed rte_flow rule capacity of all devices
+ * \param[out] bypass_ring_size size of the bypass ring
+ * \param[out] bypass_ring_dequeue_burst_size burst size of dequeuing flows
+ *        from the bypass ring
+ * \param[out] bypass_info_mempool_size size of the bypass info mempool
+ * \return 0 on success, negative value on error
+ */
+static int RteFlowBypassLoadConf(uint32_t total_capacity, uint32_t *bypass_ring_size,
         uint32_t *bypass_ring_dequeue_burst_size, uint32_t *bypass_info_mempool_size)
 {
     SCConfNode *dpdk_root = SCConfGetNode("dpdk");
     int retval = 0;
-    retval += RteFlowBypassGetNodeInt(
-            dpdk_root, bypass_ring_size, "bypass-ring-size", RTE_BYPASS_RING_SIZE_DEFAULT);
-    retval += RteFlowBypassGetNodeInt(dpdk_root, bypass_ring_dequeue_burst_size,
-            "bypass-ring-dequeue-burst-size", RTE_BYPASS_RING_DEQUEUE_BURST_SIZE_DEFAULT);
-    retval += RteFlowBypassGetBypassInfoMPSize(driver_name, bypass_info_mempool_size);
+
+    retval = RteFlowBypassGetNodeInt(
+            dpdk_root, bypass_ring_size, "bypass-ring-size", RTE_BYPASS_RING_SIZE_DEFAULT, true);
+    SCLogConfig("bypass-ring-size set to " PRIu32 "", *bypass_ring_size);
+    if (retval != 0) {
+        SCReturnInt(retval);
+    }
+    retval = RteFlowBypassGetNodeInt(dpdk_root, bypass_ring_dequeue_burst_size,
+            "bypass-ring-dequeue-burst-size", RTE_BYPASS_RING_DEQUEUE_BURST_SIZE_DEFAULT, false);
+    if (*bypass_ring_size < *bypass_ring_dequeue_burst_size) {
+        SCLogWarning("Configuration for bypass-ring-dequeue-burst-size (" PRIu32 ") is larger than "
+                     "bypass-ring-size (" PRIu32 "), capping to " PRIu32 "",
+                *bypass_ring_size, *bypass_ring_dequeue_burst_size, *bypass_ring_size - 1);
+        *bypass_ring_dequeue_burst_size = *bypass_ring_size - 1;
+    }
+    if (retval != 0) {
+        SCReturnInt(retval);
+    }
+    SCLogConfig(
+            "bypass-ring-dequeue-burst-size set to " PRIu32 "", *bypass_ring_dequeue_burst_size);
+
+    retval = RteFlowBypassGetBypassInfoMPSize(total_capacity, bypass_info_mempool_size);
     SCReturnInt(retval);
 }
+
 /**
- * \brief Enable and register functions for BypassManager,
- *        initialize rte_ring data structure and store in global
- *        variable
+ * \brief Register the interface's physical NIC budget into the shared bypass
+ *        data. The livedev ID and driver name of the FIRST successfully
+ *        registered interface are recorded for RteBypassFinalize(), which is
+ *        invoked from DeviceConfigureDynamicBypass() once the last device is
+ *        configured.
  *
  * \param iconf configuration of the interface
  * \param driver_name name of the driver
  * \return int 0 on success, negative value on error
  */
-int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
+int RteBypassRegister(DPDKIfaceConfig *iconf, const char *driver_name)
 {
     SCEnter();
-    static RteFlowBypassData *rte_flow_bypass_data = NULL;
     char *port_name = iconf->iface;
     LiveDevice *livedev = LiveGetDevice(port_name);
+    if (livedev == NULL) {
+        SCReturnInt(-EINVAL);
+    }
     LiveDevUseBypass(livedev);
-    int retval = 0;
 
-    /* We do not init the bypass data if the variable is already set */
-    if (rte_flow_bypass_data != NULL) {
-        iconf->dpdk_dev_resources->rte_flow_bypass_data = rte_flow_bypass_data;
-        RteBypassIncRef(rte_flow_bypass_data);
-        SCReturnInt(retval);
-    }
+    iconf->dpdk_dev_resources->resource_id = iconf->resource_id;
 
-    RunModeEnablesBypassManager();
-    rte_flow_bypass_data = SCCalloc(1, sizeof(RteFlowBypassData));
+    /* Perform only at first pass */
     if (rte_flow_bypass_data == NULL) {
-        SCLogError("%s: Memory allocation for RteFlowBypassData failed", port_name);
-        SCReturnInt(-ENOMEM);
+        rte_flow_bypass_data = SCCalloc(1, sizeof(RteFlowBypassData));
+        if (rte_flow_bypass_data == NULL) {
+            SCLogError("%s: Memory allocation for RteFlowBypassData failed", port_name);
+            SCReturnInt(-ENOMEM);
+        }
+        SC_ATOMIC_INIT(rte_flow_bypass_data->ref_cnt);
+        rte_flow_bypass_data->counter_update_livedev_id = livedev->id;
     }
 
-    /* Only the device which first initialized the bypass will update the global stats */
-    rte_flow_bypass_data->counter_update_livedev_id = livedev->id;
+    RteFlowNicBudget *nic_budget =
+            RteFlowBypassDataRegisterNic(rte_flow_bypass_data, iconf->resource_id, driver_name);
+    if (nic_budget == NULL) {
+        if (SC_ATOMIC_GET(rte_flow_bypass_data->ref_cnt) == 0 &&
+                rte_flow_bypass_data->nic_cnt == 0) {
+            SCFree(rte_flow_bypass_data);
+            rte_flow_bypass_data = NULL;
+        }
+        SCReturnInt(-EINVAL);
+    }
 
-    uint32_t bypass_info_mp_size, bypass_ring_size, bypass_mp_size;
-    struct rte_ring *bypass_ring = NULL;
-    struct rte_mempool *bypass_mp = NULL;
-    struct rte_mempool *bypass_info_mp = NULL;
-    retval = RteFlowBypassLoadConf(driver_name, &bypass_ring_size,
+    iconf->dpdk_dev_resources->nic_budget = nic_budget;
+    iconf->dpdk_dev_resources->rte_flow_bypass_data = rte_flow_bypass_data;
+    RteBypassIncRef(rte_flow_bypass_data);
+
+    SCReturnInt(0);
+}
+
+/**
+ * \brief Finalize the shared rte_flow bypass: create the shared ring and
+ *        mempools, register the BypassManager callback and the flow finish
+ *        callback.
+ *
+ * \return int 0 on success, negative value on error
+ */
+int RteBypassFinalize(void)
+{
+    SCEnter();
+    if (rte_flow_bypass_data == NULL) {
+        SCReturnInt(0);
+    }
+    uint32_t bypass_ring_size = 0, bypass_mp_size = 0, bypass_info_mp_size = 0;
+    int retval = RteFlowBypassLoadConf(rte_flow_bypass_data->total_rule_capacity, &bypass_ring_size,
             &rte_flow_bypass_data->rte_ring_dequeue_burst_size, &bypass_info_mp_size);
     if (retval < 0) {
         goto cleanup;
@@ -296,51 +375,55 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
     }
     rte_flow_bypass_data->ring_dequeue_buffer = ring_dequeue_buffer;
 
-    bypass_ring =
+    struct rte_ring *bypass_ring =
             rte_ring_create(RTE_BYPASS_RING_NAME, bypass_ring_size, rte_socket_id(), RING_F_SC_DEQ);
     if (bypass_ring == NULL) {
-        SCLogError("%s: rte_ring_create failed with (ring: %s): %s", port_name,
-                RTE_BYPASS_RING_NAME, rte_strerror(rte_errno));
+        SCLogError("rte_ring_create failed with (ring: %s): %s", RTE_BYPASS_RING_NAME,
+                rte_strerror(rte_errno));
         retval = -1;
         goto cleanup;
     }
     rte_flow_bypass_data->bypass_ring = bypass_ring;
 
     bypass_mp_size = (bypass_ring_size * 2) - 1;
-    bypass_mp = rte_mempool_create(RTE_BYPASS_MEMPOOL_NAME, bypass_mp_size, sizeof(FlowKey),
-            MempoolCacheSizeCalculate(bypass_mp_size), 0, NULL, NULL, NULL, NULL, rte_socket_id(),
-            0);
+    struct rte_mempool *bypass_mp = rte_mempool_create(RTE_BYPASS_MEMPOOL_NAME, bypass_mp_size,
+            sizeof(FlowKey), MempoolCacheSizeCalculate(bypass_mp_size), 0, NULL, NULL, NULL, NULL,
+            rte_socket_id(), 0);
     if (bypass_mp == NULL) {
-        SCLogError("%s: rte_mempool_create failed (mempool: %s): %s", port_name,
-                RTE_BYPASS_MEMPOOL_NAME, rte_strerror(rte_errno));
+        SCLogError("rte_mempool_create failed (mempool: %s): %s", RTE_BYPASS_MEMPOOL_NAME,
+                rte_strerror(rte_errno));
         retval = -1;
         goto cleanup;
     }
     rte_flow_bypass_data->bypass_mp = bypass_mp;
 
-    bypass_info_mp = rte_mempool_create(RTE_BYPASS_INFO_MEMPOOL_NAME, bypass_info_mp_size,
-            sizeof(RteFlowHandlerToFlow), MempoolCacheSizeCalculate(bypass_info_mp_size), 0, NULL,
-            NULL, NULL, NULL, rte_socket_id(), 0);
+    struct rte_mempool *bypass_info_mp =
+            rte_mempool_create(RTE_BYPASS_INFO_MEMPOOL_NAME, bypass_info_mp_size,
+                    sizeof(RteFlowHandlerToFlow), MempoolCacheSizeCalculate(bypass_info_mp_size), 0,
+                    NULL, NULL, NULL, NULL, rte_socket_id(), 0);
     if (bypass_info_mp == NULL) {
-        SCLogError("%s: rte_mempool_create failed (mempool: %s): %s", port_name,
-                RTE_BYPASS_INFO_MEMPOOL_NAME, rte_strerror(rte_errno));
+        SCLogError("rte_mempool_create failed (mempool: %s): %s", RTE_BYPASS_INFO_MEMPOOL_NAME,
+                rte_strerror(rte_errno));
         retval = -1;
         goto cleanup;
     }
     rte_flow_bypass_data->bypass_info_mp = bypass_info_mp;
 
-    BypassedFlowManagerRegisterCheckFunc(RteFlowBypassRuleLoad, NULL, (void *)rte_flow_bypass_data);
-
-    rte_flow_bypass_data->rte_bypass_rule_capacity = DeviceDecideRteFlowRulesCapacity(driver_name);
-
+    RunModeEnablesBypassManager();
+    retval = BypassedFlowManagerRegisterCheckFunc(
+            RteFlowBypassRuleLoad, NULL, (void *)rte_flow_bypass_data);
+    if (retval < 0) {
+        SCLogError("Bypass Manager callback failed");
+        goto cleanup;
+    }
     /* Destroys rte_flow rules of bypassed flows evicted during emergency mode */
-    SCFlowRegisterFinishCallback(RteFlowHandleEmergency, NULL);
+    retval = SCFlowRegisterFinishCallback(RteFlowHandleEmergency, NULL);
+    if (retval < 0) {
+        SCLogError("Flow finish callback registration failed");
+        goto cleanup;
+    }
 
-    SC_ATOMIC_INIT(rte_flow_bypass_data->ref_cnt);
-    SC_ATOMIC_SET(rte_flow_bypass_data->ref_cnt, 1);
-    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_rules_active);
-    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_rules_created);
-    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_rules_error);
+    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_rules_query_error);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_ring_enqueue_success);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_ring_enqueue_error_ring_full);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_ring_dequeue_success);
@@ -349,24 +432,18 @@ int RteBypassInit(DPDKIfaceConfig *iconf, const char *driver_name)
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_ring_ops);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_flows_bypass_success);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_flows_bypass_error);
-    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_flow_lookup_error);
+    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_flows_lookup_error);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_mempool_key_get_error);
     SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_mempool_info_get_error);
-    SC_ATOMIC_INIT(rte_flow_bypass_data->rte_bypass_query_error);
 
-    iconf->dpdk_dev_resources->rte_flow_bypass_data = rte_flow_bypass_data;
-
-    SCReturnInt(retval);
+    SCReturnInt(0);
 
 cleanup:
-    if (bypass_ring != NULL)
-        rte_ring_free(bypass_ring);
-    if (bypass_mp != NULL)
-        rte_mempool_free(bypass_mp);
-    if (bypass_info_mp != NULL)
-        rte_mempool_free(bypass_info_mp);
-    SCFree(rte_flow_bypass_data);
-    rte_flow_bypass_data = NULL;
+    int ref_cnt = SC_ATOMIC_GET(rte_flow_bypass_data->ref_cnt);
+    while (ref_cnt > 0) {
+        RteBypassDecRef(&rte_flow_bypass_data);
+        ref_cnt--;
+    }
     SCReturnInt(retval);
 }
 
@@ -418,6 +495,43 @@ void RteBypassDecRef(RteFlowBypassData **bypass_data_ref)
 }
 
 /**
+ * \brief Create a jump rule in the rte_flow default group to the group for bypass rules.
+ *  In some NICs, the default group has less capacity and higher rule insertion latency.
+ *
+ * \param port_id port id of the device to create the rule on
+ * \param port_name name of the device's port
+ * \return int 0 on success, negative value on error
+ */
+int RteFlowCreateJumpRule(uint16_t port_id, const char *port_name)
+{
+    struct rte_flow_error flow_error = { 0 };
+    struct rte_flow_attr attr = { 0 };
+    struct rte_flow_item pattern[] = { { 0 } };
+    struct rte_flow_action action[] = { { 0 }, { 0 }, { 0 } };
+
+    attr.ingress = 1;
+    attr.priority = 0;
+    attr.group = RTE_DEFAULT_GROUP;
+
+    pattern[0].type = RTE_FLOW_ITEM_TYPE_END;
+
+    struct rte_flow_action_jump jump = {
+        .group = RTE_JUMP_GROUP,
+    };
+
+    action[0].type = RTE_FLOW_ACTION_TYPE_JUMP;
+    action[0].conf = &jump;
+
+    struct rte_flow *flow_handler = rte_flow_create(port_id, &attr, pattern, action, &flow_error);
+    if (flow_handler == NULL) {
+        SCLogWarning(
+                "%s: Error when creating rte_flow jump rule: %s", port_name, flow_error.message);
+        SCReturnInt(-1);
+    }
+    SCReturnInt(0);
+}
+
+/**
  * \brief Decides whether the rte_flow rule is active and collects statistics for the flow.
  *        If the rule is not active, it should be removed from the table.
  *
@@ -425,7 +539,6 @@ void RteBypassDecRef(RteFlowBypassData **bypass_data_ref)
  * \param livedev LiveDevice the flow belongs to
  * \param src_rule_handler rte_flow rule handler for specific flow in one direction
  * \param dst_rule_handler rte_flow rule handler for specific flow in other direction
- * \param flow flow to be possibly removed from the table
  * \return int 1 if the rte_flow rule is active, 0 if it should be removed
  */
 static int RteFlowUpdateStats(FlowBypassInfo *fc, LiveDevice *livedev,
@@ -449,7 +562,7 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, LiveDevice *livedev,
     if (retval != 0) {
         SCLogError("rte_flow dynamic bypass: count query error %s errmsg: %s",
                 rte_strerror(-retval), flow_error.message);
-        SC_ATOMIC_ADD(livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_query_error, 1);
+        SC_ATOMIC_ADD(livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_query_error, 1);
     } else {
         src_packets = query_count.hits;
         src_bytes = query_count.bytes;
@@ -462,7 +575,7 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, LiveDevice *livedev,
     if (retval != 0) {
         SCLogError("rte_flow dynamic bypass: count query error %s errmsg: %s",
                 rte_strerror(-retval), flow_error.message);
-        SC_ATOMIC_ADD(livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_query_error, 1);
+        SC_ATOMIC_ADD(livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_query_error, 1);
     } else {
         dst_packets = query_count.hits;
         dst_bytes = query_count.bytes;
@@ -482,13 +595,14 @@ static int RteFlowUpdateStats(FlowBypassInfo *fc, LiveDevice *livedev,
 /**
  * \brief Create rte_flow drop rule for dynamic bypass
  *
+ * \param nic_budget rule budget of the NIC the rule is created on
  * \param items array of pattern items
  * \param port_id identifier of a port
  * \param flow_handler rte_flow rule handler
  * \return int 0 on success, negative value on error
  */
-static int RteFlowBypassRuleCreate(RteFlowBypassData *rte_flow_bypass_data,
-        struct rte_flow_item *items, int port_id, struct rte_flow **flow_handler)
+static int RteFlowBypassRuleCreate(RteFlowNicBudget *nic_budget, struct rte_flow_item *items,
+        int port_id, struct rte_flow **flow_handler)
 {
     struct rte_flow_error flow_error = { 0 };
     struct rte_flow_attr attr = { 0 };
@@ -520,13 +634,13 @@ static int RteFlowBypassRuleCreate(RteFlowBypassData *rte_flow_bypass_data,
 rule_failed:
     SCLogError("rte_flow dynamic bypass: create rte_flow rule error %s errmsg: %s",
             rte_strerror(-retval), flow_error.message);
-    SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_rules_error, 1);
+    SC_ATOMIC_ADD(nic_budget->rules_error, 1);
     SCReturnInt(retval);
 }
 
 static void RteFlowHandleEmergency(ThreadVars *tv, Flow *f, void *data)
 {
-    if (f->flow_state != FLOW_STATE_CAPTURE_BYPASSED &&
+    if (f->flow_state != FLOW_STATE_CAPTURE_BYPASSED ||
             (f->flow_end_flags & FLOW_END_FLAG_EMERGENCY) == 0) {
         return;
     }
@@ -543,11 +657,13 @@ static void RteFlowHandleEmergency(ThreadVars *tv, Flow *f, void *data)
             /* LiveDevice or bypass data already freed */
             return;
         }
-        RteFlowBiRuleDestroy(livedev->dpdk_vars->port_id, flow_handler_info->src_handler,
-                flow_handler_info->dst_handler);
+        uint16_t port_id = livedev->dpdk_vars->port_id;
+        RteFlowBiRuleDestroy(
+                port_id, flow_handler_info->src_handler, flow_handler_info->dst_handler);
         flow_handler_info->src_handler = NULL;
         flow_handler_info->dst_handler = NULL;
-        SC_ATOMIC_SUB(livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_active, 2);
+        if (flow_handler_info->nic_budget != NULL)
+            SC_ATOMIC_SUB(flow_handler_info->nic_budget->rules_active, 2);
     }
 }
 
@@ -597,8 +713,8 @@ int RteFlowBypassRuleLoad(
     RteFlowBypassData *rte_flow_bypass_data = (RteFlowBypassData *)data;
     struct rte_ring *bypass_ring = rte_flow_bypass_data->bypass_ring;
     struct rte_mempool *bypass_mp = rte_flow_bypass_data->bypass_mp;
-    struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 }, { 0 } };
-    uint16_t ring_dequeue_num = rte_flow_bypass_data->rte_ring_dequeue_burst_size;
+    struct rte_flow_item items[] = { { 0 }, { 0 }, { 0 }, { 0 }, { 0 }, { 0 } };
+    uint32_t ring_dequeue_num = rte_flow_bypass_data->rte_ring_dequeue_burst_size;
     uint32_t success_count = 0;
     FlowKey **ring_data = rte_flow_bypass_data->ring_dequeue_buffer;
 
@@ -632,6 +748,7 @@ int RteFlowBypassRuleLoad(
             }
             SCReturnInt(success_count);
         }
+        struct rte_flow_item_vlan vlan_spec = { 0 }, vlan_mask = { 0 };
         struct rte_flow_item_ipv4 ipv4_spec = { 0 }, ipv4_mask = { 0 };
         struct rte_flow_item_ipv6 ipv6_spec = { 0 }, ipv6_mask = { 0 };
         struct rte_flow_item_tcp tcp_spec = { 0 }, tcp_mask = { 0 };
@@ -639,18 +756,31 @@ int RteFlowBypassRuleLoad(
         void *ip_spec = NULL, *ip_mask = NULL, *l4_spec = NULL, *l4_mask = NULL;
 
         FlowKey *flow_key = ring_data[i];
-        uint16_t port_id = LiveDeviceGetById(flow_key->livedev_id)->dpdk_vars->port_id;
+        LiveDevice *livedev = LiveDeviceGetById(flow_key->livedev_id);
+        if (livedev == NULL || livedev->dpdk_vars == NULL ||
+                livedev->dpdk_vars->nic_budget == NULL) {
+            SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flows_lookup_error, 1);
+            rte_mempool_put(bypass_mp, flow_key);
+            continue;
+        }
+        uint16_t port_id = livedev->dpdk_vars->port_id;
+        RteFlowNicBudget *nic_budget = livedev->dpdk_vars->nic_budget;
         uint32_t flow_hash = FlowKeyGetHash(flow_key);
+        /* We acquire a LOCKED flow here */
         Flow *flow = FlowGetExistingFlowFromHash(flow_key, flow_hash);
         rte_mempool_put(bypass_mp, flow_key);
 
-        /* If the flow has already ended (lookup failed) or the NIC's rte_flow
-         * rule capacity is exhausted, we cannot install bypass rules. */
-        if (flow == NULL || SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) + 2 >=
-                                    rte_flow_bypass_data->rte_bypass_rule_capacity) {
+        /* If the flow has already ended (lookup failed), the flow's state has changed
+           or the NIC's rte_flow rule capacity is exhausted, we cannot install bypass rules. */
+        if (flow == NULL || (flow->flow_state != FLOW_STATE_CAPTURE_BYPASSED) ||
+                SC_ATOMIC_GET(nic_budget->rules_active) + 2 >= nic_budget->rule_capacity) {
             if (flow == NULL) {
                 /* Flow expired before we could create its bypass rule */
-                SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flow_lookup_error, 1);
+                SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flows_lookup_error, 1);
+            } else if (flow->flow_state != FLOW_STATE_CAPTURE_BYPASSED) {
+                /* Flow is no longer in the correct state to create bypass rules */
+                SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flows_lookup_error, 1);
+                FLOWLOCK_UNLOCK(flow);
             } else {
                 /* NIC rule capacity exhausted, fall back to local bypass */
                 SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flows_bypass_error, 1);
@@ -658,6 +788,22 @@ int RteFlowBypassRuleLoad(
                 FLOWLOCK_UNLOCK(flow);
             }
             continue;
+        }
+
+        /* If the flow is VLAN tagged, insert a VLAN pattern item matching the
+         * outermost VLAN ID so the bypass rule only matches tagged traffic of
+         * this flow. */
+        if (flow->vlan_idx) {
+            SCLogDebug("Add a VLAN rte_flow bypass rule (VLAN ID %u)", flow->vlan_id[0]);
+            vlan_spec.hdr.vlan_tci = htons(flow->vlan_id[0]);
+            vlan_mask.hdr.vlan_tci = htons(0x0FFF);
+            items[VLAN_INDEX].type = RTE_FLOW_ITEM_TYPE_VLAN;
+            items[VLAN_INDEX].spec = &vlan_spec;
+            items[VLAN_INDEX].mask = &vlan_mask;
+        } else {
+            items[VLAN_INDEX].type = RTE_FLOW_ITEM_TYPE_VOID;
+            items[VLAN_INDEX].spec = NULL;
+            items[VLAN_INDEX].mask = NULL;
         }
 
         /* Create rte_flow rule for original direction */
@@ -713,8 +859,7 @@ int RteFlowBypassRuleLoad(
         items[L4_INDEX].mask = l4_mask;
 
         struct rte_flow *src_rule_handler = NULL;
-        int retval =
-                RteFlowBypassRuleCreate(rte_flow_bypass_data, items, port_id, &src_rule_handler);
+        int retval = RteFlowBypassRuleCreate(nic_budget, items, port_id, &src_rule_handler);
 
         /* Create rte_flow rule for the opposite direction */
         if (FLOW_IS_IPV4(flow)) {
@@ -768,7 +913,7 @@ int RteFlowBypassRuleLoad(
         items[L4_INDEX].mask = l4_mask;
 
         struct rte_flow *dst_rule_handler = NULL;
-        retval += RteFlowBypassRuleCreate(rte_flow_bypass_data, items, port_id, &dst_rule_handler);
+        retval += RteFlowBypassRuleCreate(nic_budget, items, port_id, &dst_rule_handler);
 
         /* If either rule creation failed, destroy both rules (the one that may
          * have succeeded and the one that failed) and fall back to local
@@ -783,12 +928,13 @@ int RteFlowBypassRuleLoad(
 
         int inet_family = FLOW_IS_IPV4(flow) ? AF_INET : AF_INET6;
 
-        retval = RteFlowSetFlowBypassInfo(flow, src_rule_handler, dst_rule_handler, inet_family);
+        retval = RteFlowSetFlowBypassInfo(
+                flow, src_rule_handler, dst_rule_handler, nic_budget, inet_family);
         if (retval == 0) {
             success_count++;
             /* 2 rte_flow rules (src + dst) installed for this flow */
-            SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_rules_active, 2);
-            SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_rules_created, 2);
+            SC_ATOMIC_ADD(nic_budget->rules_active, 2);
+            SC_ATOMIC_ADD(nic_budget->rules_created, 2);
             SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flows_bypass_success, 1);
         } else {
             SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_flows_bypass_error, 1);
@@ -798,6 +944,15 @@ int RteFlowBypassRuleLoad(
     SCReturnInt(success_count);
 }
 
+/**
+ * \brief Update statistics of a bypassed flow and destroy its rte_flow rules
+ *        when the flow is no longer active.
+ *
+ * \param flow flow to update
+ * \param data RteFlowHandlerToFlow holding the flow's rte_flow rule handlers
+ * \param tsec current time in seconds
+ * \return bool true if the flow is still active, false if it can be evicted
+ */
 bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
 {
     RteFlowHandlerToFlow *flow_handler_info = (RteFlowHandlerToFlow *)data;
@@ -830,7 +985,8 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
     if (unlikely(suricata_ctl_flags != 0)) {
         flow_handler_info->src_handler = NULL;
         flow_handler_info->dst_handler = NULL;
-        SC_ATOMIC_SUB(livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_active, 2);
+        if (flow_handler_info->nic_budget != NULL)
+            SC_ATOMIC_SUB(flow_handler_info->nic_budget->rules_active, 2);
         return activity;
     }
 
@@ -840,7 +996,8 @@ bool RteBypassUpdate(Flow *flow, void *data, time_t tsec)
                     flow_handler_info->dst_handler);
             flow_handler_info->src_handler = NULL;
             flow_handler_info->dst_handler = NULL;
-            SC_ATOMIC_SUB(livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_rules_active, 2);
+            if (flow_handler_info->nic_budget != NULL)
+                SC_ATOMIC_SUB(flow_handler_info->nic_budget->rules_active, 2);
         }
     }
     SCReturnBool(activity);
@@ -864,14 +1021,28 @@ static void RteBypassFree(void *data)
     }
 }
 
-static int RteFlowSetFlowBypassInfo(
-        Flow *flow, struct rte_flow *src_handler, struct rte_flow *dst_handler, int family)
+/**
+ * \brief Store the rte_flow rule handlers of a bypassed flow in its flow
+ *        bypass info. On failure, destroy the created rules and fall back to
+ *        local bypass.
+ *
+ * \param flow flow that is being bypassed
+ * \param src_handler rte_flow rule handler for the original direction
+ * \param dst_handler rte_flow rule handler for the opposite direction
+ * \param nic_budget rule budget of the NIC the rules are created on
+ * \param family address family of the flow (AF_INET or AF_INET6)
+ * \return int 0 on success, negative value on error
+ */
+static int RteFlowSetFlowBypassInfo(Flow *flow, struct rte_flow *src_handler,
+        struct rte_flow *dst_handler, RteFlowNicBudget *nic_budget, int family)
 {
     FlowBypassInfo *fc = SCFlowGetStorageById(flow, GetFlowBypassInfoID());
     LiveDevice *livedev = LiveDeviceGetById(flow->livedev_id);
+    int retval = 0;
     if (fc) {
         if (fc->bypass_data != NULL) {
-            SCReturnInt(0);
+            retval = -EEXIST;
+            goto bypass_fail;
         }
         RteFlowHandlerToFlow *flow_handler_info;
         if (rte_mempool_get(livedev->dpdk_vars->rte_flow_bypass_data->bypass_info_mp,
@@ -879,24 +1050,26 @@ static int RteFlowSetFlowBypassInfo(
             SC_ATOMIC_ADD(
                     livedev->dpdk_vars->rte_flow_bypass_data->rte_bypass_mempool_info_get_error, 1);
             /* Mempool capacity has been reached, switch to local bypass */
+            FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
+            retval = -ENOMEM;
             goto bypass_fail;
         }
         flow_handler_info->src_handler = src_handler;
         flow_handler_info->dst_handler = dst_handler;
+        flow_handler_info->nic_budget = nic_budget;
         flow_handler_info->livedev_id = livedev->id;
         fc->bypass_data = flow_handler_info;
         fc->BypassUpdate = RteBypassUpdate;
         fc->BypassFree = RteBypassFree;
         LiveDevAddBypassStats(livedev, 1, family);
         LiveDevAddBypassSuccess(livedev, 1, family);
-        SCReturnInt(0);
+        SCReturnInt(retval);
     }
 
 bypass_fail:;
     RteFlowBiRuleDestroy(livedev->dpdk_vars->port_id, src_handler, dst_handler);
     LiveDevAddBypassFail(livedev, 1, family);
-    FlowUpdateState(flow, FLOW_STATE_LOCAL_BYPASSED);
-    SCReturnInt(-ENOMEM);
+    SCReturnInt(retval);
 }
 
 int RteFlowBypassCallback(Packet *p)
@@ -912,12 +1085,15 @@ int RteFlowBypassCallback(Packet *p)
 
     FlowKey *flow_key = NULL;
     LiveDevice *livedev = LiveDeviceGetById(p->livedev_id);
+    if (livedev == NULL || livedev->dpdk_vars == NULL ||
+            livedev->dpdk_vars->rte_flow_bypass_data == NULL) {
+        SCReturnInt(0);
+    }
     RteFlowBypassData *rte_flow_bypass_data = livedev->dpdk_vars->rte_flow_bypass_data;
 
-    /* The tested rte_flow rule capacity of the device has been exhausted, new rules will be added
-     * after bypassed flows time out and the existing rules are deleted */
-    if (SC_ATOMIC_GET(rte_flow_bypass_data->rte_bypass_rules_active) + 2 >=
-            rte_flow_bypass_data->rte_bypass_rule_capacity) {
+    RteFlowNicBudget *nic_budget = livedev->dpdk_vars->nic_budget;
+    if (nic_budget == NULL ||
+            SC_ATOMIC_GET(nic_budget->rules_active) + 2 >= nic_budget->rule_capacity) {
         SCReturnInt(0);
     }
 
@@ -952,8 +1128,7 @@ int RteFlowBypassCallback(Packet *p)
     flow_key->recursion_level = 0;
 
     int retval = rte_ring_mp_enqueue(rte_flow_bypass_data->bypass_ring, flow_key);
-    /* If ring is full, continue with local bypass. Also, if Suricata shuts down, do not increase
-     * counters */
+    /* If ring is full, continue with local bypass. */
     if (retval < 0) {
         rte_mempool_put(rte_flow_bypass_data->bypass_mp, flow_key);
         SC_ATOMIC_ADD(rte_flow_bypass_data->rte_bypass_ring_enqueue_error_ring_full, 1);

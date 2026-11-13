@@ -28,6 +28,13 @@
 #include "util-device-private.h"
 #include "util-dpdk-rte-flow.h"
 
+static uint32_t dpdk_devs_configured = 0;
+
+uint32_t DPDKConfiguredDeviceCount(void)
+{
+    return dpdk_devs_configured;
+}
+
 int DPDKDeviceResourcesInit(DPDKDeviceResources **dpdk_vars, uint16_t mp_cnt)
 {
     SCEnter();
@@ -45,6 +52,7 @@ int DPDKDeviceResourcesInit(DPDKDeviceResources **dpdk_vars, uint16_t mp_cnt)
     (*dpdk_vars)->pkt_mp_capa = mp_cnt;
     (*dpdk_vars)->pkt_mp_cnt = 0;
 
+    dpdk_devs_configured++;
     SCReturnInt(0);
 }
 
@@ -65,6 +73,7 @@ void DPDKDeviceResourcesDeinit(DPDKDeviceResources **dpdk_vars)
         }
         SCFree(*dpdk_vars);
         *dpdk_vars = NULL;
+        dpdk_devs_configured--;
     }
 #endif /* HAVE_DPDK */
 }
